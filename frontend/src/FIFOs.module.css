@@ -1,0 +1,13 @@
+.nameCol {
+  width: 100%;
+}
+
+.depthCol,
+.observedCol,
+.optimalCol {
+  min-width: 4.5em;
+}
+
+.depthInput {
+  width: 100%;
+}

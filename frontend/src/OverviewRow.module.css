@@ -1,0 +1,20 @@
+.nameCell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.expandHandle {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+}
+
+.expandHandle::after {
+  content: "\25B6";
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.expandHandle:has(> :checked)::after {
+  content: "\25BC";
+}

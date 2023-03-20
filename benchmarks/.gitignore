@@ -1,0 +1,4 @@
+project/
+vhls_output_tmp_*/
+output.csv
+vitis_hls.log

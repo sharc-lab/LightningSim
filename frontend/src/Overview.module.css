@@ -1,0 +1,7 @@
+.nameCol {
+  width: 100%;
+}
+
+.latencyCol, .optimalCol {
+  min-width: 8em;
+}

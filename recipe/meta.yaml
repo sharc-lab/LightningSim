@@ -1,0 +1,43 @@
+package:
+  name: lightningsim
+  version: "0.0.1"
+
+source:
+  path: ..
+
+build:
+  number: 1
+  entry_points:
+    - lightningsim = lightningsim.main:main
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - clang=15.0.5
+    - cmake=3
+    - nodejs=18
+    - python=3.10                            # [build_platform != target_platform]
+    - cross-python_{{ target_platform }}     # [build_platform != target_platform]
+
+  host:
+    - python=3.10
+    - pip
+    - libxml2
+    - ncurses
+    - zlib
+    - zstd
+
+  run:
+    - python=3.10
+    - jinja2
+    - llvmlite
+    - pyelftools
+    - python-socketio
+    - uvicorn-standard
+    - binutils
+    - {{ compiler('c') }}
+    - {{ compiler('cxx') }}
+
+test:
+  imports:
+    - lightningsim.main

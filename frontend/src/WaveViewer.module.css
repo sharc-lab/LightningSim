@@ -1,0 +1,76 @@
+.WaveViewer {
+  height: 100%;
+  display: flex;
+}
+
+.WaveViewer > * {
+  min-height: 100%;
+}
+
+.instructionPane,
+.resizeHandle {
+  flex: 0 0 auto;
+}
+
+.wavePane {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.waveBar {
+  background-color: green;
+  height: 2em;
+  border: 2px solid lightgreen;
+}
+
+.instructionContainer,
+.waveBarContainer {
+  height: 2em;
+}
+
+.instructionContainer {
+  padding: 0.5em;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.instruction {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resizeHandle {
+  width: 3px;
+  background-color: gray;
+  cursor: col-resize;
+}
+
+.expandHandle {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+}
+
+.expandHandle::after {
+  content: "\25B6";
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.expandHandle:has(> :checked)::after {
+  content: " ";
+}
+
+.expandHandle > .spinner,
+.expandHandle.loaded > :checked + .spinner {
+  display: none;
+}
+
+.expandHandle > :checked + .spinner {
+  display: inline-block;
+}
+
+.expandHandle.loaded:has(> :checked)::after {
+  content: "\25BC";
+}

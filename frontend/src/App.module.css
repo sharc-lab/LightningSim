@@ -1,0 +1,15 @@
+.App {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.loadingSpinner {
+  width: 6rem;
+  height: 6rem;
+}
+
+.statusSummary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
