@@ -1,0 +1,52 @@
+name: Build conda package
+on:
+  push:
+    paths-ignore:
+      - README.md
+      - LICENSE
+      - benchmarks/**
+
+jobs:
+  conda-build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Setup conda-forge channel
+        run: conda config --add channels conda-forge
+      - name: Install conda-build and conda-verify
+        run: $CONDA/bin/conda install --yes conda-build conda-verify --name base
+      - name: Create output directory
+        run: mkdir build
+      - name: Set MAKEFLAGS
+        run: echo "MAKEFLAGS=-j$(nproc)" >>"$GITHUB_ENV"
+      - name: Build conda package
+        run: $CONDA/bin/conda build --no-anaconda-upload --output-folder build recipe
+      - name: Upload conda package
+        uses: actions/upload-artifact@v3
+        with:
+          name: conda-package
+          path: build/
+
+  deploy-github-pages:
+    needs: conda-build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download conda package
+        uses: actions/download-artifact@v3
+        with:
+          name: conda-package
+          path: repo/
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: ./
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v1
