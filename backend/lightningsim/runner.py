@@ -42,9 +42,9 @@ LLVM_ROOT = CONDA_PREFIX / "share/lightningsim/llvm"
 TEMPLATE_DIR = CONDA_PREFIX / "share/lightningsim/templates"
 CONDA_LD_LIBRARY_PATH = CONDA_PREFIX / "lib"
 
-CC = os.environ.get("CC", "gcc")
-LD = os.environ.get("CXX", "g++")
-OBJCOPY = os.environ.get("OBJCOPY", "objcopy")
+CC = environ.get("CC", "gcc")
+LD = environ.get("CXX", "g++")
+OBJCOPY = environ.get("OBJCOPY", "objcopy")
 
 
 class PatternMapper(Protocol):
@@ -472,16 +472,52 @@ class Runner:
                             "-L",
                             xilinx_hls / "lnx64/tools/systemc/lib",
                             "-L",
+                            xilinx_hls / "lnx64/lib/csim",
+                            "-L",
+                            xilinx_hls / "lnx64/tools/fpo_v7_0",
+                            "-L",
+                            xilinx_hls / "lnx64/tools/fft_v9_1",
+                            "-L",
+                            xilinx_hls / "lnx64/tools/fir_v7_0",
+                            "-L",
+                            xilinx_hls / "lnx64/tools/dds_v6_0",
+                            "-L",
                             TEMPLATE_DIR,
                             "-L",
                             CONDA_LD_LIBRARY_PATH,
                             "-Xlinker",
+                            f"-rpath={xilinx_hls / 'lnx64/lib/csim'}",
+                            "-Xlinker",
+                            f"-rpath={xilinx_hls / 'lnx64/tools/fpo_v7_0'}",
+                            "-Xlinker",
+                            f"-rpath={xilinx_hls / 'lnx64/tools/fft_v9_1'}",
+                            "-Xlinker",
+                            f"-rpath={xilinx_hls / 'lnx64/tools/fir_v7_0'}",
+                            "-Xlinker",
+                            f"-rpath={xilinx_hls / 'lnx64/tools/dds_v6_0'}",
+                            "-Xlinker",
                             f"-rpath={CONDA_LD_LIBRARY_PATH}",
+                            "-Xlinker",
+                            f"-rpath-link={xilinx_hls / 'lnx64/lib/csim'}",
+                            "-Xlinker",
+                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fpo_v7_0'}",
+                            "-Xlinker",
+                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fft_v9_1'}",
+                            "-Xlinker",
+                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fir_v7_0'}",
+                            "-Xlinker",
+                            f"-rpath-link={xilinx_hls / 'lnx64/tools/dds_v6_0'}",
                             *project_object_paths,
                             object_path,
                             mapper_path,
                             *ldflags,
                             "-lsystemc",
+                            "-lhlsmc++-GCC46",
+                            "-lhlsm-GCC46",
+                            "-lIp_floating_point_v7_0_bitacc_cmodel",
+                            "-lIp_xfft_v9_1_bitacc_cmodel",
+                            "-lIp_fir_compiler_v7_2_bitacc_cmodel",
+                            "-lIp_dds_compiler_v6_0_bitacc_cmodel",
                             "-llightningsimrt",
                             "-pthread",
                             "-g",
