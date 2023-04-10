@@ -9,6 +9,8 @@ POLL_INTERVAL = 0.1
 
 
 class Function:
+    RESERVED_NAMES = {"read", "write"}
+
     def __init__(self, llvm: llvm.ValueRef, xml: ET.ElementTree):
         self.llvm = llvm
         self.xml = xml
@@ -227,6 +229,8 @@ class Function:
 
     @staticmethod
     def normalize_function_name(name: str):
+        if name in Function.RESERVED_NAMES:
+            return name + "_r"
         name = re.sub(r"[\W_]+", "_", name)
         if name.endswith("_"):
             name = name + "s"
