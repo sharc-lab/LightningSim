@@ -12,19 +12,16 @@ using namespace std;
 namespace {
     struct BBTracePass : public FunctionPass {
         static char ID;
-        FunctionCallee trace_func;
+        FunctionCallee fputs_func;
 
         BBTracePass() : FunctionPass(ID) {}
 
         bool doInitialization(Module &M) override {
-            trace_func = M.getOrInsertFunction(
-                "__hlslitesim_trace_bb",
+            fputs_func = M.getOrInsertFunction(
+                "__hlslitesim_fputs",
                 FunctionType::get(
                     Type::getVoidTy(M.getContext()),
-                    {
-                        Type::getInt8PtrTy(M.getContext()),
-                        Type::getInt32Ty(M.getContext())
-                    },
+                    {Type::getInt8PtrTy(M.getContext())},
                     false
                 )
             );
@@ -36,16 +33,20 @@ namespace {
                 return false;
             }
 
-            IRBuilder<> builder(&F.getEntryBlock());
-            Value* func_name = builder.CreateGlobalStringPtr(F.getName());
-
+            StringRef func_name = F.getName();
             uint32_t bb_id = 0;
+
             for (BasicBlock& BB : F) {
+                Twine trace_line_twine_part_1 = "trace_bb\t" + func_name;
+                Twine trace_line_twine_part_2 = trace_line_twine_part_1 + "\t";
+                Twine trace_line_twine_part_3 = trace_line_twine_part_2 + Twine(bb_id);
+                Twine trace_line_twine = trace_line_twine_part_3 + "\n";
+                SmallVector<char> trace_line_buf;
+                StringRef trace_line_str = trace_line_twine.toStringRef(trace_line_buf);
+
                 IRBuilder<> builder(&BB, BB.getFirstInsertionPt());
-                builder.CreateCall(trace_func, array<Value*, 2>({
-                    func_name,
-                    ConstantInt::get(Type::getInt32Ty(F.getContext()), bb_id)
-                }));
+                Value* trace_line = builder.CreateGlobalStringPtr(trace_line_str);
+                builder.CreateCall(fputs_func, {trace_line});
                 bb_id++;
             }
 

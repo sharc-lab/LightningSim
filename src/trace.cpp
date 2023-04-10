@@ -38,12 +38,12 @@ __hlslitesim_trace_fd_t::~__hlslitesim_trace_fd_t()
 
 extern "C"
 {
-    void __hlslitesim_trace_bb(const char* func_name, uint32_t bb_id)
+    void __hlslitesim_fputs(const char* str)
     {
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
-            fprintf(fd, "trace_bb\t%s\t%" PRIu32 "\n", func_name, bb_id);
+            fputs(str, fd);
         }
     }
 
@@ -100,7 +100,7 @@ extern "C"
             FILE* fd = __hlslitesim_trace_fd.fd;
             if (fd != NULL)
             {
-                fprintf(fd, "ap_ctrl_chain\n");
+                fputs("ap_ctrl_chain\n", fd);
             }
             return;
         }
