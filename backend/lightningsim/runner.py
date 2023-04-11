@@ -180,11 +180,13 @@ class RunnerStep(Enum):
 @dataclass
 class Step:
     start_time: float | None = None
+    progress: float | None = None
     end_time: float | None = None
     error: Exception | None = None
 
     def __init__(self):
         self._start_listeners: EventEmitter[Step] = EventEmitter()
+        self._progress_listeners: EventEmitter[Step] = EventEmitter()
         self._end_listeners: EventEmitter[Step] = EventEmitter()
         self._success_listeners: EventEmitter[Step] = EventEmitter()
         self._error_listeners: EventEmitter[Step] = EventEmitter()
@@ -196,6 +198,10 @@ class Step:
         self.end_time = None
         self.error = None
         self._start_listeners(self)
+
+    def set_progress(self, progress: float):
+        self.progress = progress
+        self._progress_listeners(self)
 
     def end(self, at: float | None = None, error: BaseException | None = None):
         if at is None:
@@ -211,11 +217,15 @@ class Step:
 
     def reset(self):
         self.start_time = None
+        self.progress = None
         self.end_time = None
         self.error = None
 
     def on_start(self, callback: Callable[["Step"], None]):
         return self._start_listeners.register(callback)
+
+    def on_progress(self, callback: Callable[["Step"], None]):
+        return self._progress_listeners.register(callback)
 
     def on_end(self, callback: Callable[["Step"], None]):
         return self._end_listeners.register(callback)
@@ -228,6 +238,7 @@ class Step:
 
     def __enter__(self):
         self.start()
+        return self
 
     def __exit__(
         self,
@@ -581,8 +592,8 @@ class Runner:
         with self.steps[RunnerStep.PARSING_SCHEDULE_DATA]:
             trace = await await_trace_functions(read_trace_result)
 
-        with self.steps[RunnerStep.RESOLVING_TRACE]:
-            trace = await resolve_trace(trace)
+        with self.steps[RunnerStep.RESOLVING_TRACE] as step:
+            trace = await resolve_trace(trace, step.set_progress)
             self.trace = trace
 
         return trace

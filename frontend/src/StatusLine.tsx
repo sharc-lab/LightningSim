@@ -1,4 +1,4 @@
-import { Component, For, Match, Switch } from "solid-js";
+import { Component, For, Match, Show, Switch } from "solid-js";
 import { BsCheckCircleFill, BsXCircleFill } from "solid-icons/bs";
 import { ServerStatusLine } from "./interface/server";
 import { useSocketContext } from "./context/socket";
@@ -81,6 +81,10 @@ const StatusLine: Component<Props> = (props: Props) => {
             <Stopwatch
               start={props.status.start! + socketContext.serverTimeDelta()}
             />
+            <Show when={props.status.progress !== null}>
+              {" "}
+              ({(props.status.progress! * 100.0).toFixed(1)}%)
+            </Show>
           </Match>
           <Match
             when={

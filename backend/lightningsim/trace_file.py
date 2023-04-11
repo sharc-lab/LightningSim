@@ -3,7 +3,7 @@ from bisect import bisect, insort
 from dataclasses import dataclass, field
 from operator import attrgetter
 from time import time
-from typing import Dict, List, Set, Tuple, TypeAlias, Union
+from typing import Callable, Dict, List, Set, Tuple, TypeAlias, Union
 from .model import BasicBlock, CDFGRegion, Instruction, Function, Solution
 
 SYNC_WORK_BATCH_DURATION = 1.0
@@ -295,14 +295,19 @@ class StackFrame:
     blocks_seen: Set[BasicBlock] = field(default_factory=set)
 
 
-async def resolve_trace(trace: UnresolvedTrace):
+async def resolve_trace(
+    trace: UnresolvedTrace,
+    progress_callback: Callable[[float], None] = lambda progress: None,
+):
     top_frame = StackFrame()
     stack: List[StackFrame] = [top_frame]
-    trace_iter = iter(trace)
+    trace_iter = iter(enumerate(trace))
+    i: int = 0
 
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
+        nonlocal i
         start_time = time()
-        for entry in trace_iter:
+        for i, entry in trace_iter:
             current_resolved_block = stack[-1].current_block
 
             if current_resolved_block is not None:
@@ -429,14 +434,23 @@ async def resolve_trace(trace: UnresolvedTrace):
             if time() - start_time >= deadline:
                 return False
 
+        i = len(trace)
         return True
 
+    def update_progress():
+        progress_callback(i / len(trace))
+
+    if not len(trace):
+        raise ValueError("kernel did not run. Did the testbench call it?")
+
     loop = get_running_loop()
+    update_progress()
     while not await loop.run_in_executor(None, do_sync_work_batch):
-        pass
+        update_progress()
+    update_progress()
 
     if stack:
-        raise ValueError("incomplete trace file")
+        raise ValueError("incomplete trace. Did the testbench terminate abruptly?")
 
     return ResolvedTrace(
         trace=top_frame.resolved_trace,

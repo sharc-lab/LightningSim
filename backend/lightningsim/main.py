@@ -71,6 +71,7 @@ class Server:
 
         for step in self.steps.values():
             step.on_start(self.on_status_change)
+            step.on_progress(self.on_status_change)
             step.on_error(self.on_status_change)
 
         for step in (
@@ -93,6 +94,7 @@ class Server:
         return {
             status.name: {
                 "start": step.start_time,
+                "progress": step.progress,
                 "end": step.end_time,
                 "error": "".join(format_exception(step.error))
                 if step.error is not None
@@ -221,6 +223,9 @@ class Server:
         def sync_start(dst: Step, src: Step):
             dst.start(at=src.start_time)
 
+        def sync_progress(dst: Step, src: Step):
+            dst.set_progress(src.progress)
+
         def sync_end(dst: Step, src: Step):
             dst.end(at=src.end_time, error=src.error)
 
@@ -241,6 +246,7 @@ class Server:
             sync_src = runner.steps[RunnerStep[step.name]]
             sync_dst = self.steps[step]
             sync_src.on_start(partial(sync_start, sync_dst))
+            sync_src.on_progress(partial(sync_progress, sync_dst))
             sync_src.on_end(partial(sync_end, sync_dst))
         runner.on_completed_process(sync_process)
 

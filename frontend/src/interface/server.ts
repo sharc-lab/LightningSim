@@ -35,6 +35,7 @@ export type ServerLatencies = ServerLatencyObject | null;
 
 export interface ServerStatusLine {
   start: number | null;
+  progress: number | null;
   end: number | null;
   error: string | null;
 };
