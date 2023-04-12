@@ -593,7 +593,7 @@ class Runner:
             trace = await await_trace_functions(read_trace_result)
 
         with self.steps[RunnerStep.RESOLVING_TRACE] as step:
-            trace = await resolve_trace(trace, step.set_progress)
+            trace = await resolve_trace(trace, progress_callback=step.set_progress)
             self.trace = trace
 
         return trace

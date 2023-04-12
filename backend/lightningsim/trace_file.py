@@ -266,6 +266,7 @@ class ResolvedTrace:
     channel_depths: Dict[Stream, int | None]
     axi_latencies: Dict[AXIInterface, int]
     is_ap_ctrl_chain: bool
+    num_stall_events: int
 
     def __iter__(self):
         return iter(self.trace)
@@ -303,9 +304,10 @@ async def resolve_trace(
     stack: List[StackFrame] = [top_frame]
     trace_iter = iter(enumerate(trace))
     i: int = 0
+    num_stall_events: int = 0
 
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
-        nonlocal i
+        nonlocal i, num_stall_events
         start_time = time()
         for i, entry in trace_iter:
             current_resolved_block = stack[-1].current_block
@@ -329,7 +331,6 @@ async def resolve_trace(
                 else:
                     if entry.type == "trace_bb":
                         raise ValueError(f"unexpected trace_bb during trace resolution")
-
                     resolved_events.append(
                         ResolvedEvent(
                             type=entry.type,
@@ -338,6 +339,7 @@ async def resolve_trace(
                             parent=current_resolved_block,
                         )
                     )
+                num_stall_events += 1
 
                 if len(resolved_events) >= len(events):
                     frame = stack[-1]
@@ -437,17 +439,14 @@ async def resolve_trace(
         i = len(trace)
         return True
 
-    def update_progress():
-        progress_callback(i / len(trace))
-
     if not len(trace):
         raise ValueError("kernel did not run. Did the testbench call it?")
 
     loop = get_running_loop()
-    update_progress()
+    progress_callback(0.0)
     while not await loop.run_in_executor(None, do_sync_work_batch):
-        update_progress()
-    update_progress()
+        progress_callback(i / len(trace))
+    progress_callback(1.0)
 
     if stack:
         raise ValueError("incomplete trace. Did the testbench terminate abruptly?")
@@ -457,4 +456,5 @@ async def resolve_trace(
         channel_depths=trace.channel_depths,
         axi_latencies=trace.axi_latencies,
         is_ap_ctrl_chain=trace.is_ap_ctrl_chain,
+        num_stall_events=num_stall_events,
     )

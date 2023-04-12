@@ -278,8 +278,10 @@ class Server:
 
         self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL].reset()
         try:
-            with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL]:
-                self.simulation_actual = await simulate(self.trace)
+            with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL] as step:
+                self.simulation_actual = await simulate(
+                    self.trace, progress_callback=step.set_progress
+                )
         except Exception:
             self.simulation_actual = None
             return False
@@ -298,10 +300,13 @@ class Server:
             channel_depths={channel: None for channel in self.trace.channel_depths},
             axi_latencies=self.trace.axi_latencies,
             is_ap_ctrl_chain=self.trace.is_ap_ctrl_chain,
+            num_stall_events=self.trace.num_stall_events,
         )
         try:
-            with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL]:
-                self.simulation_optimal = await simulate(trace)
+            with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL] as step:
+                self.simulation_optimal = await simulate(
+                    trace, progress_callback=step.set_progress
+                )
         except Exception:
             self.simulation_optimal = None
             return False

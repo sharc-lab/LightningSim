@@ -6,7 +6,7 @@ from enum import Enum, auto
 from functools import cached_property, total_ordering
 from itertools import chain, groupby
 from time import time
-from typing import Dict, Iterator, List, Set, Tuple
+from typing import Callable, Dict, Iterator, List, Sequence, Set, Tuple
 from .trace_file import AXIInterface, ResolvedEvent, ResolvedBlock, ResolvedTrace, Stream
 
 SYNC_WORK_BATCH_DURATION = 1.0
@@ -140,10 +140,10 @@ class Simulator:
         return self.events[self.event_index]
 
     @property
-    def current_stalls(self):
+    def current_stalls(self) -> Sequence[ResolvedEvent]:
         event = self.current_event
         if event is None:
-            return []
+            return ()
         return event.stalls
 
     @property
@@ -467,11 +467,15 @@ class DeadlockError(Exception):
         ]
 
 
-async def simulate(trace: ResolvedTrace):
+async def simulate(
+    trace: ResolvedTrace,
+    progress_callback: Callable[[float], None] = lambda progress: None,
+):
     top_module = Simulator(trace.trace)
     fifos = FIFOPendingReads(trace.channel_depths)
     axi_readreqs = AXIPendingRequests()
     axi_writereqs = AXIPendingRequests(track_done=True)
+    num_unstalls: int = 0
 
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
         start_time = time()
@@ -518,6 +522,7 @@ async def simulate(trace: ResolvedTrace):
                 return cycle
 
             def unstall(module: Simulator, cycle: int):
+                nonlocal num_unstalls
                 for stall_condition in module.current_stalls:
                     if stall_condition.type == "fifo_write":
                         fifo: Stream = stall_condition.metadata.fifo
@@ -535,6 +540,7 @@ async def simulate(trace: ResolvedTrace):
                         axi_writereqs.pop_txn(stall_condition, cycle)
                     if stall_condition.type == "axi_writeresp":
                         axi_writereqs.pop_txn_end(stall_condition)
+                    num_unstalls += 1
                 module.step_many()
 
             earliest_unstall: UnstallPoint | None = None
@@ -566,8 +572,10 @@ async def simulate(trace: ResolvedTrace):
         return True
 
     loop = get_running_loop()
+    progress_callback(0.0)
     while not await loop.run_in_executor(None, do_sync_work_batch):
-        pass
+        progress_callback(num_unstalls / trace.num_stall_events)
+    progress_callback(1.0)
 
     if trace.is_ap_ctrl_chain:
         top_module.set_ap_continue()
