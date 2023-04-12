@@ -23,6 +23,7 @@ requirements:
   host:
     - python=3.10
     - pip
+    - libedit
     - libxml2
     - ncurses
     - zlib
