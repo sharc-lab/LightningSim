@@ -1,5 +1,7 @@
 # :zap: LightningSim
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7823073.svg)](https://doi.org/10.5281/zenodo.7823073) [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/sharc-lab/LightningSim/conda-build.yml?branch=main)](https://github.com/sharc-lab/LightningSim/actions/workflows/conda-build.yml?query=branch%3Amain)
+
 Welcome to the LightningSim project!
 
 LightningSim is a fast, accurate trace-based simulator for High-Level Synthesis. It is developed and maintained by [Rishov Sarkar][1] from [Sharc Lab][2] at [Georgia Tech][3].
