@@ -2,7 +2,6 @@
 #define __DCL_H__
 
 // https://support.xilinx.com/s/question/0D52E00006iHkfp/vivado-20153-hls-bug-gmph?language=en_US
-#include <gmp.h>
 #define __gmp_const const
 
 #include "util.h"
