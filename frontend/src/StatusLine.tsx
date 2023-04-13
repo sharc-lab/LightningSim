@@ -4,7 +4,7 @@ import { ServerStatusLine } from "./interface/server";
 import { useSocketContext } from "./context/socket";
 import Stopwatch from "./Stopwatch";
 import Spinner from "./Spinner";
-import { formatDuration } from "./util/time";
+import { formatDuration, formatTimeRemaining } from "./util/time";
 import styles from "./StatusLine.module.css";
 
 interface Props {
@@ -83,7 +83,16 @@ const StatusLine: Component<Props> = (props: Props) => {
             />
             <Show when={props.status.progress !== null}>
               {" "}
-              ({(props.status.progress! * 100.0).toFixed(1)}%)
+              ({(props.status.progress! * 100.0).toFixed(1)}%
+              <Show when={props.status.progress !== 0}>
+                ,{" "}
+                {formatTimeRemaining(
+                  socketContext.serverNow() - props.status.start!,
+                  props.status.progress!,
+                )}{" "}
+                remaining
+              </Show>
+              )
             </Show>
           </Match>
           <Match

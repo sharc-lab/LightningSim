@@ -37,6 +37,7 @@ import Output from "./Output";
 
 const App: Component = () => {
   const [connected, setConnected] = createSignal(false);
+  const [serverNow, setServerNow] = createSignal(0);
   const [serverTimeDelta, setServerTimeDelta] = createSignal(0);
   const [status, setStatus] = createSignal<ServerStatus | undefined>(undefined);
   const [testbench, setTestbench] = createSignal<ServerTestbench | undefined>(
@@ -326,6 +327,7 @@ const App: Component = () => {
     "hello",
     ({ now, status, testbench, fifos, latencies }: ServerHello) => {
       setServerTimeDelta(window.performance.now() / 1000 - now);
+      setServerNow(now);
       setStatus(status);
       setTestbench(testbench);
       setFifos(fifos);
@@ -336,6 +338,7 @@ const App: Component = () => {
     "update",
     ({ now, status, testbench, fifos, latencies }: ServerUpdate) => {
       setServerTimeDelta(window.performance.now() / 1000 - now);
+      setServerNow(now);
       if (status !== undefined) setStatus(status);
       if (testbench !== undefined) setTestbench(testbench);
       if (fifos !== undefined) setFifos(fifos);
@@ -346,7 +349,7 @@ const App: Component = () => {
 
   return (
     <StatusContext.Provider value={status}>
-      <SocketContext.Provider value={{ socket, serverTimeDelta }}>
+      <SocketContext.Provider value={{ socket, serverNow, serverTimeDelta }}>
         <header>
           <nav class="navbar navbar-expand bg-light">
             <div class="container-fluid">
