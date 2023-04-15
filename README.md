@@ -21,7 +21,7 @@ All testing has been performed using Vitis HLS 2021.1, though we expect any rece
 [Conda][6] is required to install LightningSim. Conda may be installed following the instructions at [this link.][7] (We recommend using the [Miniconda installer.][8])
 
 [4]: https://www.xilinx.com/products/design-tools/vitis/vitis-platform.html
-[5]: https://docs.xilinx.com/r/en-US/ug1399-vitis-hls/Setting-Up-the-Environment
+[5]: https://docs.xilinx.com/r/en-US/ug1399-vitis-hls/Setting-Up-the-Environment?tocId=5N~0A2HNuVzvrGYgw0ja_A
 [6]: https://docs.conda.io/projects/conda/en/stable/
 [7]: https://docs.conda.io/projects/conda/en/stable/user-guide/install/linux.html
 [8]: https://docs.conda.io/en/latest/miniconda.html#linux-installers
