@@ -3,10 +3,10 @@ from bisect import bisect
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from functools import cached_property, total_ordering
-from itertools import chain, groupby
+from functools import cached_property
+from itertools import tee
 from time import time
-from typing import Callable, Dict, Iterator, List, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Sequence, Set, Tuple
 from .trace_file import AXIInterface, ResolvedEvent, ResolvedBlock, ResolvedTrace, Stream
 
 SYNC_WORK_BATCH_DURATION = 1.0
@@ -17,41 +17,45 @@ SAXI_STATUS_READ_DELAY = 5
 SAXI_STATUS_WRITE_DELAY = 6
 
 
-@total_ordering
-class SimulatorEventType(Enum):
-    SUBCALL = 0
-    STALL = 1
-
-    def __lt__(self, other: object):
-        if not isinstance(other, SimulatorEventType):
-            return NotImplemented
-        return self.value < other.value
-
-
-@dataclass(order=True, slots=True)
-class SimulatorEventItem:
-    stage: int
-    type: SimulatorEventType
-    event: ResolvedEvent = field(compare=False)
-
-
-@dataclass(slots=True)
-class SimulatorEvent:
-    stage: int
-    subcalls: List[ResolvedEvent]
-    stalls: List[ResolvedEvent]
-
-
 class Simulator:
-    def __init__(self, resolved_trace: List[ResolvedBlock], cycle=0):
+    def __init__(
+        self,
+        active_modules: Set["Simulator"],
+        resolved_trace: List[ResolvedBlock],
+        cycle=0,
+    ):
+        self.active_modules = active_modules
         self.trace = resolved_trace
         self.cycle = cycle
         self.stage = 0
-        self.event_index: int | None = None
-        self.active_subcalls: Dict[int, Simulator] = {}
+        self.subcalls: Dict[int, Simulator] = {}
         self.start_cycle = cycle
         self.cycle_map: List[Tuple[int, int]] = []
-        self.step_many()
+
+        events_iter1, events_iter2 = tee(
+            event for entry in self.trace for event in entry.events
+        )
+        self.subcall_inits = sorted(
+            (event for event in events_iter1 if event.type == "call"),
+            key=self.get_subcall_init_stage,
+        )
+        self.subcall_inits_ptr = 0
+        self.stalls = sorted(events_iter2, key=self.get_stall_stage)
+        self.stalls_range = (0, 0)
+        self.done = False
+
+        active_modules.add(self)
+        self.step()
+
+    @staticmethod
+    def get_subcall_init_stage(event: ResolvedEvent):
+        return event.start_stage
+
+    @staticmethod
+    def get_stall_stage(event: ResolvedEvent):
+        if event.type in ("axi_readreq",):
+            return event.start_stage
+        return event.end_stage
 
     def resolve_stage_start(self, stage: int):
         if stage == 0:
@@ -77,111 +81,46 @@ class Simulator:
     def end_stage(self):
         return max(entry.end_stage for entry in self.trace)
 
-    @cached_property
-    def events(self):
-        events = [event for entry in self.trace for event in entry.events]
-        simulator_events = sorted(
-            chain(
-                (
-                    SimulatorEventItem(
-                        stage=event.start_stage,
-                        type=SimulatorEventType.SUBCALL,
-                        event=event,
-                    )
-                    for event in events
-                    if event.type == "call"
-                ),
-                (
-                    SimulatorEventItem(
-                        stage=event.start_stage,
-                        type=SimulatorEventType.STALL,
-                        event=event,
-                    )
-                    for event in events
-                    if event.type in ("axi_readreq",)
-                ),
-                (
-                    SimulatorEventItem(
-                        stage=event.end_stage,
-                        type=SimulatorEventType.STALL,
-                        event=event,
-                    )
-                    for event in events
-                    if event.type not in ("axi_readreq",)
-                ),
-            )
-        )
-
-        def get_stage(item: SimulatorEventItem):
-            return item.stage
-
-        def make_event(stage: int, items: Iterator[SimulatorEventItem]):
-            type_map: Dict[SimulatorEventType, List[ResolvedEvent]] = {
-                SimulatorEventType.SUBCALL: [],
-                SimulatorEventType.STALL: [],
-            }
-            for item in items:
-                type_map[item.type].append(item.event)
-            return SimulatorEvent(
-                stage=stage,
-                subcalls=type_map[SimulatorEventType.SUBCALL],
-                stalls=type_map[SimulatorEventType.STALL],
-            )
-
-        return [
-            make_event(stage, items)
-            for stage, items in groupby(simulator_events, key=get_stage)
-        ]
-
-    @property
-    def current_event(self):
-        if self.done or self.event_index is None:
-            return None
-        return self.events[self.event_index]
-
     @property
     def current_stalls(self) -> Sequence[ResolvedEvent]:
-        event = self.current_event
-        if event is None:
-            return ()
-        return event.stalls
-
-    @property
-    def done(self):
-        return self.event_index is not None and self.event_index >= len(self.events)
-
-    def get_descendants(self, key: int | None = None, include_self=True):
-        descendants = {key: self} if include_self else {}
-        for initiator_id, subcall in self.active_subcalls.items():
-            descendants.update(
-                subcall.get_descendants(key=initiator_id, include_self=True)
-            )
-        return descendants
+        start, end = self.stalls_range
+        return self.stalls[start:end]
 
     def step(self):
         if self.cycle != self.resolve_stage_start(self.stage):
             self.cycle_map.append((self.stage, self.cycle))
 
-        self.event_index = self.event_index + 1 if self.event_index is not None else 0
-        event = self.current_event
-        stage = self.end_stage if event is None else event.stage
+        _, stalls_range_start = self.stalls_range
+        if stalls_range_start < len(self.stalls):
+            stalls_range_end = stalls_range_start + 1
+            stage = self.get_stall_stage(self.stalls[stalls_range_start])
+            while stalls_range_end < len(self.stalls):
+                if self.get_stall_stage(self.stalls[stalls_range_end]) != stage:
+                    break
+                stalls_range_end += 1
+        else:
+            stalls_range_end = stalls_range_start
+            stage = self.end_stage
+            self.done = True
+            self.active_modules.remove(self)
 
+        while self.subcall_inits_ptr < len(self.subcall_inits):
+            subcall_init = self.subcall_inits[self.subcall_inits_ptr]
+            subcall_init_stage = self.get_subcall_init_stage(subcall_init)
+            if subcall_init_stage > stage:
+                break
+            region = subcall_init.instruction.basic_block.region
+            start_delay = 1 if region.ii is None and region.dataflow is None else 0
+            self.subcalls[id(subcall_init)] = Simulator(
+                self.active_modules,
+                subcall_init.metadata.trace,
+                self.cycle + subcall_init_stage - self.stage + start_delay,
+            )
+            self.subcall_inits_ptr += 1
+
+        self.stalls_range = (stalls_range_start, stalls_range_end)
         self.cycle += stage - self.stage
         self.stage = stage
-
-        if event is not None:
-            for subcall in event.subcalls:
-                region = subcall.instruction.basic_block.region
-                start_delay = 1 if region.ii is None and region.dataflow is None else 0
-                self.active_subcalls[id(subcall)] = Simulator(
-                    subcall.metadata.trace, self.cycle + start_delay
-                )
-
-    def step_many(self):
-        while not self.done:
-            self.step()
-            if self.current_stalls:
-                return
 
     def set_ap_continue(self, cycle: int | None = None):
         # What is the purpose of this function?
@@ -229,10 +168,12 @@ class Simulator:
 
         # For dataflows, we need to propagate ap_continue to the sinks.
         # Such sinks will be stalls in the last event of type "call" with no dataflow outputs.
-        if not self.events:
+        if not self.stalls:
             return
-        last_event = self.events[-1]
-        for stall in last_event.stalls:
+        stage = self.get_stall_stage(self.stalls[-1])
+        for stall in reversed(self.stalls):
+            if self.get_stall_stage(stall) != stage:
+                break
             if stall.type != "call":
                 continue
             dataflow = stall.instruction.basic_block.region.dataflow
@@ -242,7 +183,7 @@ class Simulator:
             if outputs:
                 continue
             # This is a dataflow sink process. Propagate ap_continue to it.
-            self.active_subcalls[id(stall)].set_ap_continue(cycle)
+            self.subcalls[id(stall)].set_ap_continue(cycle)
 
     @property
     def entry_block(self):
@@ -456,22 +397,24 @@ class Simulation:
 
 
 class DeadlockError(Exception):
-    def __init__(self, top_module: Simulator, fifos: FIFOPendingReads):
+    def __init__(
+        self,
+        top_module: Simulator,
+        fifos: FIFOPendingReads,
+        stalled: Set[Simulator],
+    ):
         super().__init__(f"deadlocked at cycle {top_module.cycle}")
         self.top = top_module
         self.fifos = fifos
-        self.stalled = [
-            module
-            for module in top_module.get_descendants().values()
-            if not module.done
-        ]
+        self.stalled = stalled
 
 
 async def simulate(
     trace: ResolvedTrace,
     progress_callback: Callable[[float], None] = lambda progress: None,
 ):
-    top_module = Simulator(trace.trace)
+    active_modules: Set[Simulator] = set()
+    top_module = Simulator(active_modules, trace.trace)
     fifos = FIFOPendingReads(trace.channel_depths)
     axi_readreqs = AXIPendingRequests()
     axi_writereqs = AXIPendingRequests(track_done=True)
@@ -480,14 +423,11 @@ async def simulate(
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
         start_time = time()
         while not top_module.done:
-            modules = top_module.get_descendants()
-            stalled = [module for module in modules.values() if not module.done]
-
             def get_unstallable_at(module: Simulator):
                 cycle = module.cycle
                 for stall_condition in module.current_stalls:
                     if stall_condition.type == "call":
-                        subcall = modules[id(stall_condition)]
+                        subcall = module.subcalls[id(stall_condition)]
                         if not subcall.done:
                             return None
                         cycle = max(cycle, subcall.cycle)
@@ -541,10 +481,10 @@ async def simulate(
                     if stall_condition.type == "axi_writeresp":
                         axi_writereqs.pop_txn_end(stall_condition)
                     num_unstalls += 1
-                module.step_many()
+                module.step()
 
             earliest_unstall: UnstallPoint | None = None
-            for module in stalled:
+            for module in active_modules:
                 unstallable_at = get_unstallable_at(module)
                 if unstallable_at is None:
                     continue
@@ -558,9 +498,9 @@ async def simulate(
                 earliest_unstall.modules.add(module)
 
             if earliest_unstall is None:
-                raise DeadlockError(top_module, fifos)
+                raise DeadlockError(top_module, fifos, active_modules)
 
-            for module in stalled:
+            for module in active_modules:
                 module.cycle = max(module.cycle, earliest_unstall.cycle)
             for module in earliest_unstall.modules:
                 unstall(module, earliest_unstall.cycle)

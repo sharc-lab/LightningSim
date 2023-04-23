@@ -158,10 +158,10 @@ class Server:
                 "children": [
                     build_latency_object(subcall_actual, subcall_optimal)
                     for subcall_actual, subcall_optimal in zip_longest(
-                        simulator_actual.active_subcalls.values()
+                        simulator_actual.subcalls.values()
                         if simulator_actual is not None
                         else (),
-                        simulator_optimal.active_subcalls.values()
+                        simulator_optimal.subcalls.values()
                         if simulator_optimal is not None
                         else (),
                     )
