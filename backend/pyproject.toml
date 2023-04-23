@@ -7,4 +7,4 @@ name = "lightningsim"
 authors = [
     {name = "Rishov Sarkar", email = "rishov.sarkar@gatech.edu"},
 ]
-version = "0.0.3"
+version = "0.1.0"
