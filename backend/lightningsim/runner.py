@@ -298,7 +298,7 @@ class Runner:
                     xilinx_hls / "include",
                     *project_file.cflags,
                     "-c",
-                    project_file.path,
+                    project_file.path.absolute(),
                     "-g",
                     "-O3",
                     "-o",
