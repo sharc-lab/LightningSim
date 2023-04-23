@@ -21,7 +21,7 @@ from zipfile import ZipFile
 
 from lightningsim.model import Function, Solution
 from lightningsim.runner import Runner, RunnerStep
-from lightningsim.simulator import simulate
+from lightningsim.simulator import Simulator, simulate
 
 SCRIPT_DIR = Path(__file__).parent
 
@@ -56,6 +56,7 @@ async def run_benchmark(benchmark: Path):
     wait_for_synthesis_task = create_task(solution.wait_for_next_synthesis())
 
     output_path = benchmark / "output.csv"
+    details_path = benchmark / "details.txt"
     with open(output_path, "w", newline="") as output_fp:
         csv_writer = writer(output_fp)
 
@@ -129,6 +130,23 @@ async def run_benchmark(benchmark: Path):
                 )
             )
             output_fp.flush()
+
+            with open(details_path, "w") as details_fp:
+                max_digits = len(f"{lightningsim_cycles}")
+
+                def write_details(simulator: Simulator, indent=""):
+                    details_fp.write(
+                        f"{indent}"
+                        f"[{simulator.start_cycle:{max_digits}d}-"
+                        f"{simulator.cycle:{max_digits}d}] "
+                        f"{simulator.function.name}\n"
+                    )
+                    for subcall in simulator.subcalls.values():
+                        write_details(subcall, indent=indent + "\t")
+
+                write_details(simulation.simulator)
+
+            log(f"Cycle counts for all functions written to {relpath(details_path)}")
             del simulation
 
             log("Starting LightningSim incremental simulation...")
@@ -426,6 +444,7 @@ def main():
             for job, benchmark_dir in zip(jobs, benchmark_dirs)
         }
         for i, job in enumerate(as_completed(jobs)):
+            job.result()  # re-raise any exceptions
             message = f"{i + 1}/{benchmark_count_human} completed."
             del remaining[id(job)]
             if remaining:

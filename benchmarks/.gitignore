@@ -1,4 +1,5 @@
 project/
 vhls_output_tmp_*/
 output.csv
+details.txt
 vitis_hls.log
