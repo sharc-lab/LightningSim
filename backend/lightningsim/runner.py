@@ -109,10 +109,19 @@ class CompletedProcess:
         return shlex.join(self.args)
 
     def check_returncode(self):
-        if self.returncode != 0:
-            raise RuntimeError(
-                f"command {self.command} returned non-zero exit status {self.returncode}"
-            )
+        if self.returncode == 0:
+            return
+        message = (
+            f"command {self.command} "
+            f"returned non-zero exit status {self.returncode}"
+        )
+        if self.output:
+            line_prefix = "> "
+            formatted_output = self.output.rstrip("\n")
+            formatted_output = formatted_output.replace("\n", f"\n{line_prefix}")
+            formatted_output = line_prefix + formatted_output
+            message += f" with output:\n{formatted_output}"
+        raise RuntimeError(message)
 
 
 async def run(args: Sequence[str | Path], check=False, **kwargs):
