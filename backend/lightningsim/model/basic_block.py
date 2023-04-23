@@ -99,7 +99,11 @@ class BasicBlock:
 
                 if interface_type == "ap_fifo":
                     num_operands = sum(
-                        int(operand is not None and operand.type == CDFGEdge.INPUT)
+                        int(
+                            operand is not None
+                            and operand.type == CDFGEdge.INPUT
+                            and operand.sink_id == instruction.id
+                        )
                         for operand in instruction.operands
                     )
                     return {
