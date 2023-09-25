@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "setuptools-rust"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,4 +7,10 @@ name = "lightningsim"
 authors = [
     {name = "Rishov Sarkar", email = "rishov.sarkar@gatech.edu"},
 ]
-version = "0.1.0"
+version = "0.2.0"
+
+[tool.setuptools.packages.find]
+namespaces = false
+
+[[tool.setuptools-rust.ext-modules]]
+target = "lightningsim._core"

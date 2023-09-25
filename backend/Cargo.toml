@@ -1,0 +1,13 @@
+[package]
+name = "lightningsim-core"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = { version = "0.19.2", features = ["extension-module"] }
+rustworkx-core = "0.13.1"
+
+[lib]
+name = "_core"
+path = "lightningsim-core/lib.rs"
+crate-type = ["cdylib"]
