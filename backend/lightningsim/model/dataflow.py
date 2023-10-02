@@ -17,6 +17,7 @@ class Dataflow:
     def insts(self):
         # process_list > item[] > pins > item[] > inst
         # channel_list > item[] > {source,sink} > inst
+        # channel_list > item[] > {source_list,sink_list} > item[] > inst
         return {
             inst.attrib["object_id"]: self.region.function.instructions[
                 int(inst.find("ssdmobj_id").text)
@@ -30,7 +31,28 @@ class Dataflow:
                 (
                     source_sink.find("inst")
                     for channel in self.xml.find("channel_list").findall("item")
-                    for source_sink in (channel.find("source"), channel.find("sink"))
+                    for source_sink in chain(
+                        (
+                            source_sink
+                            for source_sink in (
+                                channel.find("source"),
+                                channel.find("sink"),
+                            )
+                            if source_sink is not None
+                        ),
+                        (
+                            source_sink
+                            for source_sink_list in (
+                                source_sink_list
+                                for source_sink_list in (
+                                    channel.find("source_list"),
+                                    channel.find("sink_list"),
+                                )
+                                if source_sink_list is not None
+                            )
+                            for source_sink in source_sink_list.findall("item")
+                        ),
+                    )
                 ),
             )
             if "object_id" in inst.attrib
@@ -53,7 +75,8 @@ class Dataflow:
             process: [] for process in self.insts.values()
         }
         for channel in self.channels:
-            process_inputs[channel.sink].append(channel)
+            for sink in channel.sinks:
+                process_inputs[sink].append(channel)
         return process_inputs
 
     @cached_property
@@ -62,7 +85,8 @@ class Dataflow:
             process: [] for process in self.insts.values()
         }
         for channel in self.channels:
-            process_outputs[channel.source].append(channel)
+            for source in channel.sources:
+                process_outputs[source].append(channel)
         return process_outputs
 
     @cached_property
@@ -79,9 +103,11 @@ class Dataflow:
                 spec_channels[channel_ref] = instruction
 
         return {
-            channel: spec_channels.get(channel.definition.llvm)
-            if channel.definition is not None
-            else None
+            channel: (
+                spec_channels.get(channel.definition.llvm)
+                if channel.definition is not None
+                else None
+            )
             for channel in self.channels
         }
 
@@ -103,22 +129,48 @@ class Channel:
         return self.xml.find("name").text or ""
 
     @cached_property
-    def source(self):
-        inst = self.xml.find("source").find("inst")
-        try:
-            object_id = inst.attrib["object_id"]
-        except KeyError:
-            object_id = inst.attrib["object_id_reference"]
-        return self.dataflow.insts[object_id]
+    def sources(self):
+        def get_inst(xml: ET.ElementTree):
+            inst = xml.find("inst")
+            try:
+                object_id = inst.attrib["object_id"]
+            except KeyError:
+                object_id = inst.attrib["object_id_reference"]
+            return self.dataflow.insts[object_id]
+
+        source = self.xml.find("source")
+        source_list = self.xml.find("source_list")
+        source_list_items = (
+            source_list.findall("item") if source_list is not None else ()
+        )
+        return tuple(
+            get_inst(xml)
+            for xml in chain(
+                (source,) if source is not None else (),
+                source_list_items,
+            )
+        )
 
     @cached_property
-    def sink(self):
-        inst = self.xml.find("sink").find("inst")
-        try:
-            object_id = inst.attrib["object_id"]
-        except KeyError:
-            object_id = inst.attrib["object_id_reference"]
-        return self.dataflow.insts[object_id]
+    def sinks(self):
+        def get_inst(xml: ET.ElementTree):
+            inst = xml.find("inst")
+            try:
+                object_id = inst.attrib["object_id"]
+            except KeyError:
+                object_id = inst.attrib["object_id_reference"]
+            return self.dataflow.insts[object_id]
+
+        sink = self.xml.find("sink")
+        sink_list = self.xml.find("sink_list")
+        sink_list_items = sink_list.findall("item") if sink_list is not None else ()
+        return tuple(
+            get_inst(xml)
+            for xml in chain(
+                (sink,) if sink is not None else (),
+                sink_list_items,
+            )
+        )
 
     @property
     def definition(self):
@@ -133,7 +185,17 @@ class Channel:
         return self.definition is not None and self.spec_channel is None
 
     def __repr__(self):
-        return f"<Channel {self.name} from {self.source.function_name} to {self.sink.function_name}>"
+        source_name = (
+            ", ".join(source.function_name for source in self.sources)
+            if len(self.sources) > 0
+            else "(N/A)"
+        )
+        sink_name = (
+            ", ".join(sink.function_name for sink in self.sinks)
+            if len(self.sinks) > 0
+            else "(N/A)"
+        )
+        return f"<Channel {self.name} from {source_name} to {sink_name}>"
 
 
 from .cdfg_region import CDFGRegion
