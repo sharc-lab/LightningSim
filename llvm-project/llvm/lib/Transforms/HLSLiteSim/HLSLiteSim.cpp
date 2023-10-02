@@ -83,6 +83,12 @@ namespace {
                         EB_builder.CreateCall(fputs_func, {trace_line_endloop});
                     }
                 }
+            }else{
+                for (BasicBlock *BB : L->blocks()) {
+                    //remove the hlslitesim_fputs call
+                    Instruction *FirstInstrPt = &BB->front();
+                    FirstInstrPt->dropUnknownNonDebugMetadata()  //this will drop the bb_id metadata
+                }
             }
             if(modified)
                 return true;
@@ -184,22 +190,25 @@ namespace {
                 Value* trace_line = builder.CreateGlobalStringPtr(trace_line_str);
                 builder.CreateCall(fputs_func, {trace_line});
 
-                //Insert the block number as metadata on the fputs call at key bb_id
-                Instruction *InsertPt = &BB.front();
-                LLVMContext &Context = BB.getContext();
 
-                //Create metadata nodes
-                MDString *KeyString = MDString::get(Context, "bb_id");
-                ConstantAsMetadata *ValueMetadata = ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context), bb_id));
-                Metadata *MDNodeOps[] = {KeyString, ValueMetadata};
-                MDNode *MetadataNode = MDNode::get(Context, MDNodeOps);
 
-                // Add metadata to the basic block
-                InsertPt->setMetadata("bb_id", MetadataNode);
-                
                 //if this basic block is in a loop, check if the loop has a constant trip count and set the metadata accordingly
                 Loop *L = KLoop->getLoopFor(&BB);
                 if(L){
+                    
+                    //Insert the block number as metadata on the fputs call at key bb_id
+                    Instruction *InsertPt = &BB.front();
+                    LLVMContext &Context = BB.getContext();
+                    //Create metadata nodes
+                    MDString *KeyString = MDString::get(Context, "bb_id");
+                    ConstantAsMetadata *ValueMetadata = ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context), bb_id));
+                    Metadata *MDNodeOps[] = {KeyString, ValueMetadata};
+                    MDNode *MetadataNode = MDNode::get(Context, MDNodeOps);
+
+                    // Add metadata to the basic block
+                    InsertPt->setMetadata("bb_id", MetadataNode);
+
+
                     if(!LoopMDSsdmOpTripCountExists(L)){
                         for (Instruction &I : BB) {
                             if (CallInst *CI = dyn_cast<CallInst>(&I)) {
