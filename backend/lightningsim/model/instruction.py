@@ -91,10 +91,10 @@ class InstructionLatency:
             # if any input is scalar, wait for completion of scalar input processes
             scalar_inputs = [input for input in inputs if input.is_scalar]
             if scalar_inputs:
-                return max(input.source.latency.end for input in scalar_inputs) + 1
+                return max(source.latency.end for input in scalar_inputs for source in input.sources) + 1
 
             # start propagation
-            return min(input.source.latency.start for input in inputs) + 1
+            return min(source.latency.start for input in inputs for source in input.sources) + 1
 
         return int(self.xml.find("first").text)
 
