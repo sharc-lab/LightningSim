@@ -4,6 +4,7 @@ use std::{cmp, iter, ops};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::AsPyPointer;
 
 use rustworkx_core::petgraph::algo;
@@ -12,6 +13,7 @@ use rustworkx_core::petgraph::prelude::*;
 type ClockCycle = u64;
 type SimulationStage = u64;
 type AxiAddress = u64;
+type FifoId = u32;
 
 const SHIFT_REGISTER_RAW_DELAY: ClockCycle = 1;
 const SHIFT_REGISTER_WAR_DELAY: ClockCycle = 1;
@@ -151,7 +153,7 @@ impl<'a: 'b, 'b> Iterator for SortedTraceIterator<'a, 'b> {
 
 #[derive(FromPyObject, Clone, Copy, PartialEq, Eq, Hash)]
 struct Fifo {
-    id: u32,
+    id: FifoId,
 }
 
 enum FifoType {
@@ -174,16 +176,16 @@ struct SubcallEvent {
 
 struct FifoEvent {
     stall_stage: SimulationStage,
-    fifo: Fifo,
+    fifo: PyObject,
 }
 
 #[derive(Clone, Copy)]
-struct AxiGenericIoRange {
+struct AxiAddressRange {
     offset: AxiAddress,
     length: AxiAddress,
 }
 
-impl AxiGenericIoRange {
+impl AxiAddressRange {
     fn burst_count(&self) -> usize {
         (((self.offset + self.length - 1) / 4096) - (self.offset / 4096) + 1)
             .try_into()
@@ -194,7 +196,7 @@ impl AxiGenericIoRange {
 struct AxiGenericEvent {
     stall_stage: SimulationStage,
     interface: AxiInterface,
-    range: AxiGenericIoRange,
+    range: AxiAddressRange,
 }
 
 struct AxiWriteResponseEvent {
@@ -228,8 +230,8 @@ impl ResolvedEvent {
     }
 }
 
-impl<'a> FromPyObject<'a> for ResolvedEvent {
-    fn extract(event: &'a PyAny) -> PyResult<Self> {
+impl FromPyObject<'_> for ResolvedEvent {
+    fn extract(event: &PyAny) -> PyResult<Self> {
         let event_type = event.getattr(intern!(event.py(), "type"))?.extract()?;
         let metadata = event.getattr(intern!(event.py(), "metadata"))?;
         match event_type {
@@ -262,12 +264,12 @@ impl<'a> FromPyObject<'a> for ResolvedEvent {
             }
             "fifo_read" => {
                 let stall_stage = event.getattr(intern!(event.py(), "end_stage"))?.extract()?;
-                let fifo = metadata.getattr(intern!(event.py(), "fifo"))?.extract()?;
+                let fifo = metadata.getattr(intern!(event.py(), "fifo"))?.into();
                 Ok(ResolvedEvent::FifoRead(FifoEvent { stall_stage, fifo }))
             }
             "fifo_write" => {
                 let stall_stage = event.getattr(intern!(event.py(), "end_stage"))?.extract()?;
-                let fifo = metadata.getattr(intern!(event.py(), "fifo"))?.extract()?;
+                let fifo = metadata.getattr(intern!(event.py(), "fifo"))?.into();
                 Ok(ResolvedEvent::FifoWrite(FifoEvent { stall_stage, fifo }))
             }
             "axi_readreq" => {
@@ -282,7 +284,7 @@ impl<'a> FromPyObject<'a> for ResolvedEvent {
                 Ok(ResolvedEvent::AxiReadRequest(AxiGenericEvent {
                     stall_stage,
                     interface,
-                    range: AxiGenericIoRange { offset, length },
+                    range: AxiAddressRange { offset, length },
                 }))
             }
             "axi_read" => {
@@ -295,7 +297,7 @@ impl<'a> FromPyObject<'a> for ResolvedEvent {
                 Ok(ResolvedEvent::AxiRead(AxiGenericEvent {
                     stall_stage,
                     interface,
-                    range: AxiGenericIoRange { offset, length },
+                    range: AxiAddressRange { offset, length },
                 }))
             }
             "axi_writereq" => {
@@ -308,7 +310,7 @@ impl<'a> FromPyObject<'a> for ResolvedEvent {
                 Ok(ResolvedEvent::AxiWriteRequest(AxiGenericEvent {
                     stall_stage,
                     interface,
-                    range: AxiGenericIoRange { offset, length },
+                    range: AxiAddressRange { offset, length },
                 }))
             }
             "axi_write" => {
@@ -321,7 +323,7 @@ impl<'a> FromPyObject<'a> for ResolvedEvent {
                 Ok(ResolvedEvent::AxiWrite(AxiGenericEvent {
                     stall_stage,
                     interface,
-                    range: AxiGenericIoRange { offset, length },
+                    range: AxiAddressRange { offset, length },
                 }))
             }
             "axi_writeresp" => {
@@ -348,16 +350,27 @@ struct ResolvedBlock {
     end_stage: SimulationStage,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FifoIoNodes {
+    fifo: PyObject,
     writes: Vec<NodeIndex>,
     reads: Vec<NodeIndex>,
+}
+
+impl FifoIoNodes {
+    fn new(fifo: PyObject) -> Self {
+        FifoIoNodes {
+            fifo,
+            writes: Vec::new(),
+            reads: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 struct AxiGenericIoNode {
     node: NodeIndex,
-    range: AxiGenericIoRange,
+    range: AxiAddressRange,
 }
 
 #[derive(Clone, Default)]
@@ -471,9 +484,10 @@ impl Simulation {
 #[pymethods]
 impl GlobalModel {
     #[new]
-    fn new(trace: Trace) -> PyResult<Self> {
+    fn new(py: Python<'_>, trace: Trace) -> PyResult<Self> {
         fn build_cfg(
-            graph: &mut DiGraph<u64, u64>,
+            py: Python<'_>,
+            graph: &mut DiGraph<ClockCycle, ClockCycle>,
             node_mappings: &mut NodeMappings,
             trace: &Trace,
             start: NodeWithDelay,
@@ -492,7 +506,8 @@ impl GlobalModel {
                 for subcall in subcalls {
                     let subcall_start =
                         current + (subcall.start_stage - previous_stage + subcall.start_delay);
-                    let submodule = build_cfg(graph, node_mappings, &subcall.trace, subcall_start)?;
+                    let submodule =
+                        build_cfg(py, graph, node_mappings, &subcall.trace, subcall_start)?;
                     unreaped_submodules.insert(subcall.py_event.as_ptr(), submodule.end);
                     submodules.push(submodule);
                 }
@@ -522,14 +537,14 @@ impl GlobalModel {
                             }
                             ResolvedEvent::FifoWrite(fifo_write) => node_mappings
                                 .fifo_nodes
-                                .entry(fifo_write.fifo)
-                                .or_default()
+                                .entry(fifo_write.fifo.extract(py)?)
+                                .or_insert_with(|| FifoIoNodes::new(fifo_write.fifo.clone_ref(py)))
                                 .writes
                                 .push(node),
                             ResolvedEvent::FifoRead(fifo_read) => node_mappings
                                 .fifo_nodes
-                                .entry(fifo_read.fifo)
-                                .or_default()
+                                .entry(fifo_read.fifo.extract(py)?)
+                                .or_insert_with(|| FifoIoNodes::new(fifo_read.fifo.clone_ref(py)))
                                 .reads
                                 .push(node),
                             ResolvedEvent::AxiReadRequest(axi_readreq) => node_mappings
@@ -595,7 +610,7 @@ impl GlobalModel {
             node: start_node,
             delay: 0,
         };
-        let top_module = build_cfg(&mut graph, &mut node_mappings, &trace, start)?;
+        let top_module = build_cfg(py, &mut graph, &mut node_mappings, &trace, start)?;
 
         Ok(GlobalModel {
             graph,
@@ -655,7 +670,7 @@ impl GlobalModel {
         Ok(())
     }
 
-    fn set_axi_delays(&mut self, axi_delays: HashMap<AxiInterface, u64>) -> PyResult<()> {
+    fn set_axi_delays(&mut self, axi_delays: HashMap<AxiInterface, ClockCycle>) -> PyResult<()> {
         if self.has_axi_delays {
             return Err(PyValueError::new_err(
                 "axi delays already set for this model",
@@ -672,7 +687,7 @@ impl GlobalModel {
             let delay = cmp::max(delay, 1);
             let mut readreq_iter = nodes.readreqs.iter();
             let mut current_readreq: Option<&AxiGenericIoNode> = None;
-            let mut consumed: u64 = 0;
+            let mut consumed: AxiAddress = 0;
             let mut rctl_depth: usize = 0;
             let mut rctl_burst_counts: VecDeque<usize> = VecDeque::with_capacity(MAX_RCTL_DEPTH);
             let mut rctl_tail_nodes: VecDeque<NodeIndex> = VecDeque::with_capacity(MAX_RCTL_DEPTH);
@@ -724,7 +739,7 @@ impl GlobalModel {
             let writeresp_iter = nodes.writeresps.iter();
             let mut writereqresp_iter = iter::zip(writereq_iter, writeresp_iter);
             let mut current_writereqresp: Option<(&AxiGenericIoNode, &NodeIndex)> = None;
-            let mut consumed: u64 = 0;
+            let mut consumed: AxiAddress = 0;
             for &write in &nodes.writes {
                 let (&writereq, &writeresp_node) = match current_writereqresp {
                     Some(writereqresp) => writereqresp,
@@ -760,6 +775,33 @@ impl GlobalModel {
     fn get_latencies(&mut self) -> PyResult<Simulation> {
         self.update_latencies()?;
         Ok(Simulation::new(&self.graph, &self.top_module))
+    }
+
+    fn get_observed_fifo_depths<'a>(&mut self, py: Python<'a>) -> PyResult<&'a PyDict> {
+        self.update_latencies()?;
+        let result = PyDict::new(py);
+        for nodes in self.node_mappings.fifo_nodes.values() {
+            let mut depth: usize = 0;
+            let mut max_depth: usize = 0;
+            let mut write_iter = nodes.writes.iter().map(|&node| self.graph[node]);
+            let mut read_iter = nodes.reads.iter().map(|&node| self.graph[node]);
+            let mut next_write_cycle = write_iter.next();
+            let mut next_read_cycle = read_iter.next();
+
+            while let (Some(write_cycle), Some(read_cycle)) = (next_write_cycle, next_read_cycle) {
+                if write_cycle < read_cycle {
+                    depth += 1;
+                    max_depth = max_depth.max(depth);
+                    next_write_cycle = write_iter.next();
+                } else {
+                    depth -= 1;
+                    next_read_cycle = read_iter.next();
+                }
+            }
+
+            result.set_item(nodes.fifo.as_ref(py), max_depth)?;
+        }
+        Ok(result)
     }
 
     fn clone(&self) -> PyResult<Self> {
