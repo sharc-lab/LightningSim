@@ -4,7 +4,7 @@ use std::{cmp, iter, ops};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyIterator};
 use pyo3::AsPyPointer;
 
 use rustworkx_core::petgraph::algo;
@@ -21,6 +21,9 @@ const RAM_RAW_DELAY: ClockCycle = 2;
 const RAM_WAR_DELAY: ClockCycle = 1;
 const AXI_READ_OVERHEAD: ClockCycle = 12;
 const AXI_WRITE_OVERHEAD: ClockCycle = 7;
+const SAXI_STATUS_UPDATE_OVERHEAD: ClockCycle = 5;
+const SAXI_STATUS_READ_DELAY: ClockCycle = 5;
+const SAXI_STATUS_WRITE_DELAY: ClockCycle = 6;
 const MAX_RCTL_DEPTH: usize = 16;
 
 struct Trace {
@@ -172,6 +175,7 @@ struct SubcallEvent {
     stall_stage: SimulationStage,
     start_delay: ClockCycle,
     trace: Trace,
+    inherit_ap_continue: bool,
 }
 
 struct FifoEvent {
@@ -236,30 +240,35 @@ impl FromPyObject<'_> for ResolvedEvent {
         let metadata = event.getattr(intern!(event.py(), "metadata"))?;
         match event_type {
             "call" => {
-                fn is_pipeline(region: &PyAny) -> PyResult<bool> {
-                    Ok(!region.getattr(intern!(region.py(), "ii"))?.is_none())
-                }
-                fn is_dataflow(region: &PyAny) -> PyResult<bool> {
-                    Ok(!region.getattr(intern!(region.py(), "dataflow"))?.is_none())
-                }
-
-                let region = event
-                    .getattr(intern!(event.py(), "instruction"))?
+                let call_inst = event.getattr(intern!(event.py(), "instruction"))?;
+                let region = call_inst
                     .getattr(intern!(event.py(), "basic_block"))?
                     .getattr(intern!(event.py(), "region"))?;
+                let pipeline_ii = region.getattr(intern!(region.py(), "ii"))?;
+                let in_pipeline = !pipeline_ii.is_none();
+                let dataflow = region.getattr(intern!(region.py(), "dataflow"))?;
+                let in_dataflow = !dataflow.is_none();
                 let start_stage = event
                     .getattr(intern!(event.py(), "start_stage"))?
                     .extract()?;
                 let stall_stage = event.getattr(intern!(event.py(), "end_stage"))?.extract()?;
                 let trace = metadata.getattr(intern!(event.py(), "trace"))?.extract()?;
-                let has_start_delay = !is_pipeline(region)? && !is_dataflow(region)?;
+                let has_start_delay = !in_pipeline && !in_dataflow;
                 let start_delay = if has_start_delay { 1 } else { 0 };
+                let is_dataflow_sink = in_dataflow
+                    && dataflow
+                        .getattr("process_outputs")?
+                        .get_item(call_inst)?
+                        .len()?
+                        == 0;
+                let inherit_ap_continue = is_dataflow_sink;
                 Ok(ResolvedEvent::Subcall(SubcallEvent {
                     py_event: event.into(),
                     start_stage,
                     stall_stage,
                     start_delay,
                     trace,
+                    inherit_ap_continue,
                 }))
             }
             "fifo_read" => {
@@ -389,8 +398,11 @@ struct NodeWithDelay {
 }
 
 impl NodeWithDelay {
-    fn resolve<T>(&self, graph: &DiGraph<ClockCycle, T>) -> ClockCycle {
-        graph[self.node] + self.delay
+    fn resolve<T: ops::Index<usize, Output = ClockCycle> + ?Sized>(
+        &self,
+        node_cycles: &T,
+    ) -> ClockCycle {
+        node_cycles[self.node.index()] + self.delay
     }
 }
 
@@ -411,6 +423,7 @@ struct ModuleInvocation {
     start: NodeWithDelay,
     end: NodeWithDelay,
     submodules: Vec<ModuleInvocation>,
+    inherit_ap_continue: bool,
 }
 
 #[derive(Clone, Default)]
@@ -421,18 +434,108 @@ struct NodeMappings {
 
 #[pyclass]
 #[derive(Clone)]
-struct GlobalModel {
-    graph: DiGraph<ClockCycle, ClockCycle>,
+struct SimulationBuilder {
+    graph: DiGraph<(), ClockCycle>,
     node_mappings: NodeMappings,
     top_module: ModuleInvocation,
     has_fifo_depths: bool,
     has_axi_delays: bool,
-    has_updated_node_latencies: bool,
+    is_ap_ctrl_chain: bool,
+    num_parameters: u32,
 }
 
 #[pyclass]
 #[derive(Clone)]
 struct Simulation {
+    node_cycles: Box<[ClockCycle]>,
+    node_mappings: NodeMappings,
+    #[pyo3(get)]
+    top_module: SimulationModule,
+}
+
+impl Simulation {
+    fn new(builder: &SimulationBuilder) -> PyResult<Self> {
+        let mut node_cycles =
+            vec![ClockCycle::default(); builder.graph.node_count()].into_boxed_slice();
+        let node_mappings = builder.node_mappings.clone();
+
+        let nodes = match algo::toposort(&builder.graph, None) {
+            Ok(nodes) => nodes,
+            Err(_) => {
+                return Err(PyValueError::new_err(
+                    "simulation will deadlock. Please check FIFO depths",
+                ))
+            }
+        };
+
+        for node in nodes {
+            node_cycles[node.index()] = builder
+                .graph
+                .edges_directed(node, Direction::Incoming)
+                .map(|edge| node_cycles[edge.source().index()] + edge.weight())
+                .max()
+                .unwrap_or(0);
+        }
+
+        let ap_continue = if builder.is_ap_ctrl_chain {
+            ApContinue::TopLevel {
+                num_parameters: builder.num_parameters,
+            }
+        } else {
+            ApContinue::NotApplicable
+        };
+        let top_module = SimulationModule::new(&node_cycles, &builder.top_module, ap_continue);
+
+        Ok(Simulation {
+            node_cycles,
+            node_mappings,
+            top_module,
+        })
+    }
+}
+
+#[pymethods]
+impl Simulation {
+    fn get_latency(&self) -> ClockCycle {
+        self.top_module.end
+    }
+
+    fn get_observed_fifo_depths<'a>(&self, py: Python<'a>) -> PyResult<&'a PyDict> {
+        let result = PyDict::new(py);
+        for nodes in self.node_mappings.fifo_nodes.values() {
+            let mut depth: usize = 0;
+            let mut max_depth: usize = 0;
+            let mut write_iter = nodes
+                .writes
+                .iter()
+                .map(|&node| self.node_cycles[node.index()]);
+            let mut read_iter = nodes
+                .reads
+                .iter()
+                .map(|&node| self.node_cycles[node.index()]);
+            let mut next_write_cycle = write_iter.next();
+            let mut next_read_cycle = read_iter.next();
+
+            while let (Some(write_cycle), Some(read_cycle)) = (next_write_cycle, next_read_cycle) {
+                if write_cycle < read_cycle {
+                    depth += 1;
+                    max_depth = max_depth.max(depth);
+                    next_write_cycle = write_iter.next();
+                } else {
+                    depth -= 1;
+                    next_read_cycle = read_iter.next();
+                }
+            }
+
+            result.set_item(nodes.fifo.as_ref(py), max_depth)?;
+        }
+        Ok(result)
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct SimulationModule {
     #[pyo3(get)]
     trace: PyObject,
     #[pyo3(get)]
@@ -440,19 +543,67 @@ struct Simulation {
     #[pyo3(get)]
     end: ClockCycle,
     #[pyo3(get)]
-    submodules: Vec<Simulation>,
+    submodules: Vec<SimulationModule>,
 }
 
-impl Simulation {
-    fn new<T>(graph: &DiGraph<ClockCycle, T>, module: &ModuleInvocation) -> Self {
-        Simulation {
+#[derive(Clone, Copy)]
+enum ApContinue {
+    NotApplicable,
+    TopLevel { num_parameters: u32 },
+    Propagated(ClockCycle),
+}
+
+impl SimulationModule {
+    fn new(node_cycles: &[ClockCycle], module: &ModuleInvocation, ap_continue: ApContinue) -> Self {
+        let start = module.start.resolve(node_cycles);
+        let ap_done = module.end.resolve(node_cycles);
+        let ap_continue = if module.inherit_ap_continue {
+            ap_continue
+        } else {
+            ApContinue::NotApplicable
+        };
+        let end = match ap_continue {
+            ApContinue::NotApplicable => ap_done,
+            ApContinue::TopLevel { num_parameters } => {
+                // ap_continue is asserted by AESL_axi_slave_control some cycles after it reads ap_done.
+                // It checks ap_done every few cycles; we first calculate how often it performs this check.
+
+                // AESL_axi_slave_control is structured as a series of repeated sequential processes.
+                // They are:
+                // - update_status (process_num = 0), which reads ap_done and writes ap_continue
+                // - write_* (process_num = 1, ..., N), which write the top-level parameters
+                // - write_start (process_num = N + 1), which writes ap_start(?)
+                // Each contributes a cycle to the loop, except update_status, which takes
+                // SAXI_STATUS_UPDATE_OVERHEAD cycles.
+                let saxi_status_read_interval =
+                    SAXI_STATUS_UPDATE_OVERHEAD + (num_parameters as ClockCycle) + 1;
+
+                // The first status read occurs at cycle SAXI_STATUS_READ_DELAY after ap_start,
+                // so we calculate when the update_status process will first read ap_done.
+                let saxi_status_ap_done_read_cycle =
+                    (ap_done + saxi_status_read_interval - SAXI_STATUS_READ_DELAY - 1)
+                        / saxi_status_read_interval
+                        * saxi_status_read_interval
+                        + SAXI_STATUS_READ_DELAY;
+
+                // ap_continue will be asserted SAXI_STATUS_WRITE_DELAY cycles after that.
+                saxi_status_ap_done_read_cycle + SAXI_STATUS_WRITE_DELAY
+            }
+            ApContinue::Propagated(ap_continue) => ap_continue,
+        };
+        let ap_continue = match ap_continue {
+            ApContinue::TopLevel { .. } => ApContinue::Propagated(end),
+            _ => ap_continue,
+        };
+
+        SimulationModule {
             trace: module.py_trace.clone(),
-            start: module.start.resolve(graph),
-            end: module.end.resolve(graph),
+            start,
+            end,
             submodules: module
                 .submodules
                 .iter()
-                .map(|submodule| Simulation::new(graph, submodule))
+                .map(|submodule| SimulationModule::new(node_cycles, submodule, ap_continue))
                 .collect(),
         }
     }
@@ -469,10 +620,10 @@ impl Simulation {
 }
 
 #[pymethods]
-impl Simulation {
+impl SimulationModule {
     fn __repr__(&self, py: Python<'_>) -> String {
         format!(
-            "<Simulation of {}: cycles {}-{}>",
+            "<SimulationModule for {}: cycles {}-{}>",
             self.get_function_name(py)
                 .unwrap_or_else(|_| "(unknown function)".into()),
             self.start,
@@ -482,15 +633,16 @@ impl Simulation {
 }
 
 #[pymethods]
-impl GlobalModel {
+impl SimulationBuilder {
     #[new]
     fn new(py: Python<'_>, trace: Trace) -> PyResult<Self> {
         fn build_cfg(
             py: Python<'_>,
-            graph: &mut DiGraph<ClockCycle, ClockCycle>,
+            graph: &mut DiGraph<(), ClockCycle>,
             node_mappings: &mut NodeMappings,
             trace: &Trace,
             start: NodeWithDelay,
+            inherit_ap_continue: bool,
         ) -> PyResult<ModuleInvocation> {
             let mut unreaped_submodules = HashMap::new();
             let mut submodules = Vec::new();
@@ -506,8 +658,14 @@ impl GlobalModel {
                 for subcall in subcalls {
                     let subcall_start =
                         current + (subcall.start_stage - previous_stage + subcall.start_delay);
-                    let submodule =
-                        build_cfg(py, graph, node_mappings, &subcall.trace, subcall_start)?;
+                    let submodule = build_cfg(
+                        py,
+                        graph,
+                        node_mappings,
+                        &subcall.trace,
+                        subcall_start,
+                        subcall.inherit_ap_continue,
+                    )?;
                     unreaped_submodules.insert(subcall.py_event.as_ptr(), submodule.end);
                     submodules.push(submodule);
                 }
@@ -521,7 +679,7 @@ impl GlobalModel {
                         delay,
                     };
                 } else {
-                    let node = graph.add_node(0);
+                    let node = graph.add_node(());
                     graph.add_edge(current.node, node, delay);
                     current = NodeWithDelay { node, delay: 0 };
 
@@ -600,25 +758,42 @@ impl GlobalModel {
                 start,
                 end: current,
                 submodules,
+                inherit_ap_continue,
             })
         }
 
         let mut graph = DiGraph::new();
         let mut node_mappings = NodeMappings::default();
-        let start_node = graph.add_node(0);
+        let start_node = graph.add_node(());
         let start = NodeWithDelay {
             node: start_node,
             delay: 0,
         };
-        let top_module = build_cfg(py, &mut graph, &mut node_mappings, &trace, start)?;
+        let top_module = build_cfg(py, &mut graph, &mut node_mappings, &trace, start, true)?;
 
-        Ok(GlobalModel {
+        let top_ports: &PyIterator = trace
+            .py_trace
+            .as_ref(py)
+            .get_item(0)?
+            .getattr(intern!(py, "basic_block"))?
+            .getattr(intern!(py, "parent"))?
+            .getattr(intern!(py, "ports"))?
+            .call_method0(intern!(py, "values"))?
+            .iter()?;
+        let num_parameters = top_ports.fold(Ok(0), |acc, port| -> PyResult<_> {
+            let acc = acc?;
+            let interface_type: u32 = port?.getattr(intern!(py, "interface_type"))?.extract()?;
+            Ok(acc + (if interface_type == 0 { 1 } else { 0 }))
+        })?;
+
+        Ok(SimulationBuilder {
             graph,
             node_mappings,
             top_module,
             has_fifo_depths: false,
             has_axi_delays: false,
-            has_updated_node_latencies: false,
+            is_ap_ctrl_chain: false,
+            num_parameters,
         })
     }
 
@@ -666,7 +841,6 @@ impl GlobalModel {
         }
 
         self.has_fifo_depths = true;
-        self.has_updated_node_latencies = false;
         Ok(())
     }
 
@@ -763,45 +937,15 @@ impl GlobalModel {
         }
 
         self.has_axi_delays = true;
-        self.has_updated_node_latencies = false;
         Ok(())
     }
 
-    fn get_latency(&mut self) -> PyResult<ClockCycle> {
-        self.update_latencies()?;
-        Ok(self.top_module.end.resolve(&self.graph))
+    fn set_ap_ctrl_chain(&mut self, is_ap_ctrl_chain: bool) {
+        self.is_ap_ctrl_chain = is_ap_ctrl_chain;
     }
 
-    fn get_latencies(&mut self) -> PyResult<Simulation> {
-        self.update_latencies()?;
-        Ok(Simulation::new(&self.graph, &self.top_module))
-    }
-
-    fn get_observed_fifo_depths<'a>(&mut self, py: Python<'a>) -> PyResult<&'a PyDict> {
-        self.update_latencies()?;
-        let result = PyDict::new(py);
-        for nodes in self.node_mappings.fifo_nodes.values() {
-            let mut depth: usize = 0;
-            let mut max_depth: usize = 0;
-            let mut write_iter = nodes.writes.iter().map(|&node| self.graph[node]);
-            let mut read_iter = nodes.reads.iter().map(|&node| self.graph[node]);
-            let mut next_write_cycle = write_iter.next();
-            let mut next_read_cycle = read_iter.next();
-
-            while let (Some(write_cycle), Some(read_cycle)) = (next_write_cycle, next_read_cycle) {
-                if write_cycle < read_cycle {
-                    depth += 1;
-                    max_depth = max_depth.max(depth);
-                    next_write_cycle = write_iter.next();
-                } else {
-                    depth -= 1;
-                    next_read_cycle = read_iter.next();
-                }
-            }
-
-            result.set_item(nodes.fifo.as_ref(py), max_depth)?;
-        }
-        Ok(result)
+    fn build(&self) -> PyResult<Simulation> {
+        Simulation::new(&self)
     }
 
     fn clone(&self) -> PyResult<Self> {
@@ -809,36 +953,8 @@ impl GlobalModel {
     }
 }
 
-impl GlobalModel {
-    fn update_latencies(&mut self) -> PyResult<()> {
-        if self.has_updated_node_latencies {
-            return Ok(());
-        }
-
-        let nodes = match algo::toposort(&self.graph, None) {
-            Ok(nodes) => nodes,
-            Err(_) => {
-                return Err(PyValueError::new_err(
-                    "simulation will deadlock. Please check FIFO depths",
-                ))
-            }
-        };
-        for node in nodes {
-            self.graph[node] = self
-                .graph
-                .edges_directed(node, Direction::Incoming)
-                .map(|edge| self.graph[edge.source()] + edge.weight())
-                .max()
-                .unwrap_or(0);
-        }
-
-        self.has_updated_node_latencies = true;
-        Ok(())
-    }
-}
-
 #[pymodule]
 fn _core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    m.add_class::<GlobalModel>()?;
+    m.add_class::<SimulationBuilder>()?;
     Ok(())
 }
