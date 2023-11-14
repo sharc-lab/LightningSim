@@ -126,7 +126,7 @@ async def read_trace(reader: StreamReader, solution: Solution):
         elif type == "ap_ctrl_chain":
             is_ap_ctrl_chain = True
 
-        elif type == "trace_bb":
+        elif type in ("trace_bb", "loop_bb"):
             function, basic_block = metadata_list
             basic_block = int(basic_block)
             if function not in function_parses:
@@ -171,18 +171,7 @@ async def read_trace(reader: StreamReader, solution: Solution):
                 bisect(axi_interfaces, address, key=address_getter) - 1
             ]
             trace.append(axi_writeresp_cache[interface])
-        elif type == "loop_bb":
-            function, basic_block = metadata_list
-            basic_block = int(basic_block)
-            if function not in function_parses:
-                function_parses[function] = solution.get_function(function)
-            try:
-                entry = trace_bb_cache[function, basic_block]
-            except KeyError:
-                entry = TraceEntry(type, TraceBBMetadata(function, basic_block))
-                trace_bb_cache[function, basic_block] = entry
-            trace.append(entry)
-        elif type == "loop" or type == "end_loop_blocks" or type == "end_loop":
+        elif type in ("loop", "end_loop_blocks", "end_loop"):
             loopname, tripcount = metadata_list
             tripcount = int(tripcount)
             if function not in function_parses:
@@ -248,17 +237,8 @@ class ResolvedEvent:
     type: str
     instruction: Instruction
     metadata: ResolvedEventMetadata
-    #parent: "ResolvedBlock"
     end_stage: int
     start_stage: int
-
-    # @property
-    # def start_stage(self):
-    #     return self.parent.start_stage + self.instruction.latency.relative_start
-
-    # @property
-    # def end_stage(self):
-    #     return self.parent.start_stage + self.instruction.latency.relative_end
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,10 +259,6 @@ class ResolvedBlock:
     end_stage: int
     start_stage: int
 
-    # @property
-    # def start_stage(self):
-    #     return self.end_stage - self.basic_block.length
-
     def __repr__(self):
         return f"<ResolvedBlock {self.basic_block.name} in {self.basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {len(self.events)} event(s)>"
 
@@ -295,11 +271,6 @@ class UnresolvedLoop:
     events: List[ResolvedEvent]
     end_stage: int
     start_stage: int
-
-
-    # @property
-    # def start_stage(self):
-    #     return self.end_stage - self.basic_block.length
 
     def __repr__(self):
         return f"<ResolvedLoop {self.name} in {self.blocks[0].basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {self.tripcount} interations>"
@@ -334,7 +305,7 @@ class StackFrame:
     resolved_trace: List[ResolvedBlock] = field(default_factory=list)
     current_block: ResolvedBlock | None = None
     current_loop: UnresolvedLoop | None = None
-    curr_loop_idx: int = 0
+    loop_idx: int = 0
     dynamic_stage: int = 0
     static_stage: int = 0
     latest_dynamic_stage: int = 0
@@ -357,26 +328,27 @@ async def resolve_trace(
         nonlocal i, num_stall_events
         start_time = time()
         for i, entry in trace_iter:
-            current_resolved_block = stack[-1].current_block
             current_loop = stack[-1].current_loop
-
             if entry.type == "end_loop":
+                frame = stack[-1]
                 #convert unresolved loop to resolved block
                 resolved_block = ResolvedBlock(
                     None, current_loop.events, current_loop.end_stage, current_loop.start_stage 
                 )
-                frame = stack[-1]
-                frame.curr_loop_idx = 0
-                frame.dynamic_stage = current_loop.end_stage
+                frame.resolved_trace.append(resolved_block)
+
                 frame.current_block = None
                 frame.current_loop = None
-                frame.resolved_trace.append(resolved_block)
-                current_resolved_block = None
+                frame.loop_idx = 0
+
                 frame.static_stage = current_loop.blocks[-1].basic_block.end
+                frame.dynamic_stage = current_loop.end_stage
                 if frame.dynamic_stage >= frame.latest_dynamic_stage:
                     frame.latest_dynamic_stage = frame.dynamic_stage
                     frame.latest_static_stage = frame.static_stage
                 continue
+
+            current_resolved_block = stack[-1].current_block
 
             if current_resolved_block is not None:
                 basic_block = current_resolved_block.basic_block
@@ -386,49 +358,39 @@ async def resolve_trace(
                 next_frame: StackFrame | None = None
                 if event_instruction.opcode == "call":
                     next_frame = StackFrame()
+                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
+                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
                     if current_loop is not None:
-                        resolved_events.append(
-                            ResolvedEvent(
-                                type="call",
-                                instruction=event_instruction,
-                                metadata=SubcallMetadata(next_frame.resolved_trace),
-                                end_stage=current_resolved_block.start_stage+current_loop.ii*frame.curr_loop_idx + event_instruction.latency.relative_end,
-                                start_stage=current_resolved_block.start_stage+current_loop.ii*frame.curr_loop_idx + event_instruction.latency.relative_start
-                            )
+                        end_stage+=current_loop.ii*frame.loop_idx
+                        start_stage+=current_loop.ii*frame.loop_idx
+                    resolved_events.append(
+                        ResolvedEvent(
+                            type="call",
+                            instruction=event_instruction,
+                            metadata=SubcallMetadata(next_frame.resolved_trace),
+                            end_stage=end_stage,
+                            start_stage=start_stage
                         )
-                    else:
-                        resolved_events.append(
-                            ResolvedEvent(
-                                type="call",
-                                instruction=event_instruction,
-                                metadata=SubcallMetadata(next_frame.resolved_trace),
-                                end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end,
-                                start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
-                            )
-                        )
+                    )
                 else:
                     if entry.type == "trace_bb":
                         raise ValueError(f"unexpected trace_bb during trace resolution")
+                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
+                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
                     if current_loop is not None:
-                        resolved_events.append(
-                            ResolvedEvent(
-                                type=entry.type,
-                                instruction=event_instruction,
-                                metadata=entry.metadata,
-                                end_stage=current_resolved_block.start_stage+current_loop.ii*frame.curr_loop_idx + event_instruction.latency.relative_end,
-                                start_stage=current_resolved_block.start_stage+current_loop.ii*frame.curr_loop_idx + event_instruction.latency.relative_start
-                            )
+                        end_stage+=current_loop.ii*frame.loop_idx
+                        start_stage+=current_loop.ii*frame.loop_idx
+                    
+                    resolved_events.append(
+                        ResolvedEvent(
+                            type=entry.type,
+                            instruction=event_instruction,
+                            metadata=entry.metadata,
+                            end_stage=end_stage,
+                            start_stage=start_stage
                         )
-                    else:
-                        resolved_events.append(
-                            ResolvedEvent(
-                                type=entry.type,
-                                instruction=event_instruction,
-                                metadata=entry.metadata,
-                                end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end,
-                                start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
-                            )
-                        )
+                    )
+
                 num_stall_events += 1
                 if len(resolved_events) >= len(events):
                     frame = stack[-1]
@@ -436,19 +398,13 @@ async def resolve_trace(
                         current_loop.events.extend(resolved_events)
                         current_resolved_block.events.clear()
                         idx = current_loop.blocks.index(frame.current_block) +1
-                        flag = False
-                        while idx < len(current_loop.blocks):
-                            if len(current_loop.blocks[idx].basic_block.events) >0:
+                        while (True):
+                            if idx == len(current_loop.blocks):
+                                frame.loop_idx +=1
+                            if len(current_loop.blocks[idx%len(current_loop.blocks)].basic_block.events) >0:
                                 frame.current_block = current_loop.blocks[idx]
-                                flag = True
                                 break
                             idx += 1
-                        if not flag:
-                            frame.curr_loop_idx += 1
-                            for resolved_block in current_loop.blocks:
-                                if len(resolved_block.basic_block.events) >0:
-                                    frame.current_block = resolved_block
-                                    break
                     else:
                         frame.current_block = None
                         if basic_block.terminator.opcode in ("ret", "return"):
@@ -469,23 +425,20 @@ async def resolve_trace(
                     frame = stack[-1]
                     frame.current_loop = current_loop
                 elif entry.type == "end_loop_blocks":
+                    loop_overlap_length = 0
                     if current_loop.blocks[0].basic_block.pipeline is not None:
                         loop_overlap_length = current_loop.blocks[-1].basic_block.end-current_loop.blocks[0].basic_block.start-current_loop.blocks[0].basic_block.pipeline.ii
                         current_loop = replace(current_loop, ii=current_loop.blocks[0].basic_block.pipeline.ii)
                     if loop_overlap_length < 0:
                         loop_overlap_length = 0
-                    frame.curr_loop_idx = 0
+                    frame.loop_idx = 0
                     loop_end_stage = (loop_overlap_length)+current_loop.ii*(current_loop.tripcount)
-                    current_loop = replace(current_loop, end_stage= loop_end_stage)
-                    frame.current_loop = current_loop
-                    frame.pipeline = current_loop.blocks[0].basic_block.pipeline
+                    frame.current_loop = replace(current_loop, end_stage= loop_end_stage)
                     for resolved_block in current_loop.blocks:
                         if len(resolved_block.basic_block.events) >0:
                             frame.current_block = resolved_block
                             break
-                elif entry.type == "trace_bb" or entry.type == "loop_bb":
-                    #raise ValueError(f"expected trace_bb during trace resolution")
-
+                elif entry.type in ("trace_bb", "loop_bb"):
                     # `frame` holds the current state of the trace resolution.
                     frame = stack[-1]
                     function = trace.functions[entry.metadata.function]
@@ -548,8 +501,6 @@ async def resolve_trace(
                             frame.blocks_seen.clear()
                         frame.blocks_seen.add(basic_block)
                     
-
-
                         current_resolved_block = ResolvedBlock(
                             basic_block, [], frame.dynamic_stage, frame.dynamic_stage - basic_block.length
                         )
