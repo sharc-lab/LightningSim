@@ -391,7 +391,7 @@ namespace {
             legacy::PassManager PM;
             PM.add(new BBTracePass());
             PM.add(new FixLoopMDPass());
-            //PM.add(new FixedLoopAnalysisPass());
+            PM.add(new FixedLoopAnalysisPass());
             return PM.run(M);
         }
     };
