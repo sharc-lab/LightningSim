@@ -1,8 +1,10 @@
+use std::ops;
+
 use pyo3::prelude::*;
 
 use crate::{
     node::{NodeIndex, NodeWithDelay},
-    simulation::ClockCycle,
+    ClockCycle,
 };
 
 pub type FifoId = u32;
@@ -12,8 +14,10 @@ const SHIFT_REGISTER_WAR_DELAY: ClockCycle = 1;
 const RAM_RAW_DELAY: ClockCycle = 2;
 const RAM_WAR_DELAY: ClockCycle = 1;
 
-#[derive(FromPyObject, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[pyclass]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Fifo {
+    #[pyo3(get)]
     pub id: FifoId,
 }
 
@@ -37,6 +41,15 @@ pub struct FifoIoNodes {
     /// own node, which is why this is a [Box] of [NodeIndex] instead of
     /// [NodeWithDelay].
     pub(crate) reads: Box<[NodeIndex]>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct FifoIo {
+    #[pyo3(get)]
+    pub writes: Vec<ClockCycle>,
+    #[pyo3(get)]
+    pub reads: Vec<ClockCycle>,
 }
 
 impl FifoType {
@@ -64,6 +77,26 @@ impl FifoType {
         match self {
             Self::ShiftRegister => SHIFT_REGISTER_WAR_DELAY,
             Self::Ram => RAM_WAR_DELAY,
+        }
+    }
+}
+
+impl FifoIo {
+    pub fn new<T>(fifo_io_nodes: &FifoIoNodes, node_cycles: &T) -> Self
+    where
+        T: ops::Index<usize, Output = ClockCycle> + ?Sized,
+    {
+        FifoIo {
+            writes: fifo_io_nodes
+                .writes
+                .iter()
+                .map(|node| node.resolve(node_cycles))
+                .collect(),
+            reads: fifo_io_nodes
+                .reads
+                .iter()
+                .map(|&node| node_cycles[node.try_into().unwrap()])
+                .collect(),
         }
     }
 }

@@ -35,10 +35,6 @@ pub struct InsertedFifoRead<'a> {
 }
 
 impl FifoBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn insert_write(&mut self) -> InsertedFifoWrite {
         let index = self.writes.len();
         self.writes.push(None);

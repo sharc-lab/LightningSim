@@ -30,10 +30,6 @@ impl<T> Default for Tee<T> {
 }
 
 impl<T> Tee<T> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn next(&mut self, consumer: TeeConsumer) -> TeeResult<T> {
         let value = if self.leader != consumer {
             self.queue.pop_front()
@@ -44,10 +40,6 @@ impl<T> Tee<T> {
             tee: self,
             consumer,
         })
-    }
-
-    pub fn len(&self) -> usize {
-        self.queue.len()
     }
 
     pub fn is_empty(&self) -> bool {

@@ -1,6 +1,6 @@
 use std::ops;
 
-use crate::simulation::ClockCycle;
+use crate::ClockCycle;
 
 pub type NodeIndex = u32;
 
@@ -11,7 +11,7 @@ pub struct NodeWithDelay {
 }
 
 impl NodeWithDelay {
-    fn resolve<T: ops::Index<usize, Output = ClockCycle> + ?Sized>(
+    pub fn resolve<T: ops::Index<usize, Output = ClockCycle> + ?Sized>(
         &self,
         node_cycles: &T,
     ) -> ClockCycle {

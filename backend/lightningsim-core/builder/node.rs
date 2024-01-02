@@ -2,7 +2,7 @@ use std::ops;
 
 use smallvec::SmallVec;
 
-use crate::{node::NodeWithDelay, simulation::ClockCycle};
+use crate::{node::NodeWithDelay, ClockCycle};
 
 use super::event::Event;
 
@@ -24,16 +24,8 @@ pub enum NodeTime {
 }
 
 impl UncommittedNode {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn is_own_node(&self) -> bool {
         self.events.iter().any(|event| event.has_in_edge())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
     }
 }
 
@@ -60,8 +52,8 @@ impl ops::Add<ClockCycle> for NodeTime {
 impl ops::AddAssign<ClockCycle> for NodeTime {
     fn add_assign(&mut self, rhs: ClockCycle) {
         match self {
-            Self::Absolute(mut time) => time += rhs,
-            Self::RelativeToStart(mut delay) => delay += rhs,
+            Self::Absolute(time) => *time += rhs,
+            Self::RelativeToStart(delay) => *delay += rhs,
         }
     }
 }

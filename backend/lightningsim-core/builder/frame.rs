@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::simulation::SimulationStage;
+use crate::SimulationStage;
 
 use super::{
     edge_builder::IncompleteEdgeKey,
@@ -41,11 +41,7 @@ pub struct SimulationStagePair {
 }
 
 impl StackFrame {
-    pub fn new(
-        key: ModuleKey,
-        parent_end: SimulationStage,
-        start_edge: IncompleteEdgeKey,
-    ) -> Self {
+    pub fn new(key: ModuleKey, parent_end: SimulationStage, start_edge: IncompleteEdgeKey) -> Self {
         Self {
             key,
             parent_end,

@@ -7,7 +7,7 @@ use crate::{
     edge::{Edge, EdgeIndex},
     fifo::Fifo,
     node::{NodeIndex, NodeWithDelay},
-    simulation::{ClockCycle, SimulationGraph},
+    ClockCycle, SimulationGraph,
 };
 
 pub type IncompleteEdgeKey = usize;

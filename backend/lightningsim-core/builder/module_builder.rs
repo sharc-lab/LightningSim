@@ -2,10 +2,7 @@ use slab::Slab;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{
-    node::NodeWithDelay,
-    simulation::{ClockCycle, CompiledModule},
-};
+use crate::{node::NodeWithDelay, ClockCycle, CompiledModule};
 
 use super::{event::Event, node::NodeTime};
 
@@ -92,7 +89,7 @@ impl ModuleBuilder {
             .map(move |(position, event)| (start + position, event))
     }
 
-    fn try_resolve_module(&self, module: CommittedModule) -> Option<CompiledModule> {
+    fn try_resolve_module(&mut self, module: CommittedModule) -> Option<CompiledModule> {
         let CommittedModule {
             name,
             start,

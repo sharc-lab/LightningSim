@@ -4,7 +4,7 @@ use crate::{
     axi_interface::{AxiInterface, AXI_READ_OVERHEAD, AXI_WRITE_OVERHEAD},
     fifo::{Fifo, FifoType},
     node::NodeWithDelay,
-    simulation::{CompiledSimulation, SimulationParameters},
+    CompiledSimulation, SimulationParameters,
 };
 
 pub type EdgeIndex = usize;

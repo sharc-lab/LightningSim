@@ -57,7 +57,6 @@ pub struct AxiRequestRange {
 pub struct InsertedAxiReadReq<'a> {
     pub index: usize,
     pub read_edge: ReadEdgeNeeded<'a>,
-    pub voided_rctl_edges: VoidedRctlEdgeIter<'a>,
 }
 
 /// A newly created AXI read.
@@ -97,11 +96,6 @@ pub struct RctlEdgeNeeded<'a> {
 
 #[must_use]
 pub struct WriteRespEdgeNeeded<'a> {
-    builder: &'a mut AxiBuilder,
-}
-
-#[must_use]
-pub struct VoidedRctlEdgeIter<'a> {
     builder: &'a mut AxiBuilder,
 }
 
@@ -148,7 +142,6 @@ impl AxiBuilder {
         InsertedAxiReadReq {
             index,
             read_edge: ReadEdgeNeeded { builder: self },
-            voided_rctl_edges: VoidedRctlEdgeIter { builder: self },
         }
     }
 
@@ -174,16 +167,19 @@ impl AxiBuilder {
 
         self.readreq_reads_remaining -= 1;
         let is_last_of_readreq = self.readreq_reads_remaining == 0;
+        let read_edge = self.read_edge.take();
+        let rctl_in_edge = self.rctl_edge.take();
+        let rctl_out_edge = if is_last_of_readreq {
+            Some(RctlEdgeNeeded { builder: self })
+        } else {
+            None
+        };
 
         InsertedAxiRead {
             index,
-            read_edge: self.read_edge.take(),
-            rctl_out_edge: if is_last_of_readreq {
-                Some(RctlEdgeNeeded { builder: self })
-            } else {
-                None
-            },
-            rctl_in_edge: self.rctl_edge.take(),
+            read_edge,
+            rctl_out_edge,
+            rctl_in_edge,
         }
     }
 
@@ -250,7 +246,7 @@ impl AxiBuilder {
             .filter_map(|burst| burst.rctl_edge)
     }
 
-    fn pop_rctl_edge(&mut self) -> Option<IncompleteEdgeKey> {
+    pub fn pop_rctl_edge(&mut self) -> Option<IncompleteEdgeKey> {
         if self.rctl_depth < MAX_RCTL_DEPTH {
             return None;
         }
@@ -367,15 +363,6 @@ impl<'a> RctlEdgeNeeded<'a> {
 impl<'a> WriteRespEdgeNeeded<'a> {
     pub fn provide(self, edge: IncompleteEdgeKey) {
         self.builder.writeresp_edge = edge;
-    }
-}
-
-impl<'a> Iterator for VoidedRctlEdgeIter<'a> {
-    type Item = IncompleteEdgeKey;
-
-    #[must_use]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.builder.pop_rctl_edge()
     }
 }
 
