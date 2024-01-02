@@ -4,8 +4,11 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+bitvec = "1.0.1"
 pyo3 = { version = "0.19.2", features = ["extension-module"] }
-rustworkx-core = "0.13.1"
+rustc-hash = "1.1.0"
+slab = "0.4.5"
+smallvec = "1.11.1"
 
 [lib]
 name = "_core"

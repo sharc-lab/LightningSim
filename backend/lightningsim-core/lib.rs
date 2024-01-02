@@ -1,5 +1,12 @@
+mod builder;
+mod simulation;
+mod node;
+mod edge;
+mod axi_interface;
+mod fifo;
+
 use std::collections::{HashMap, VecDeque};
-use std::{cmp, iter, ops};
+use std::{cmp, iter};
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
@@ -7,24 +14,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator};
 use pyo3::AsPyPointer;
 
-use rustworkx_core::petgraph::algo;
-use rustworkx_core::petgraph::prelude::*;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
-type ClockCycle = u64;
-type SimulationStage = u64;
-type AxiAddress = u64;
-type FifoId = u32;
-
-const SHIFT_REGISTER_RAW_DELAY: ClockCycle = 1;
-const SHIFT_REGISTER_WAR_DELAY: ClockCycle = 1;
-const RAM_RAW_DELAY: ClockCycle = 2;
-const RAM_WAR_DELAY: ClockCycle = 1;
-const AXI_READ_OVERHEAD: ClockCycle = 12;
-const AXI_WRITE_OVERHEAD: ClockCycle = 7;
-const SAXI_STATUS_UPDATE_OVERHEAD: ClockCycle = 5;
-const SAXI_STATUS_READ_DELAY: ClockCycle = 5;
-const SAXI_STATUS_WRITE_DELAY: ClockCycle = 6;
-const MAX_RCTL_DEPTH: usize = 16;
+use simulation::{ClockCycle, SimulationStage, AxiAddress, FifoId, NodeIndex, NodeWithDelay};
 
 struct Trace {
     py_trace: PyObject,
@@ -152,21 +145,6 @@ impl<'a: 'b, 'b> Iterator for SortedTraceIterator<'a, 'b> {
             subcalls,
         })
     }
-}
-
-#[derive(FromPyObject, Clone, Copy, PartialEq, Eq, Hash)]
-struct Fifo {
-    id: FifoId,
-}
-
-enum FifoType {
-    ShiftRegister,
-    Ram,
-}
-
-#[derive(FromPyObject, Clone, Copy, PartialEq, Eq, Hash)]
-struct AxiInterface {
-    address: AxiAddress,
 }
 
 struct SubcallEvent {
@@ -360,76 +338,105 @@ struct ResolvedBlock {
 }
 
 #[derive(Clone)]
-struct FifoIoNodes {
-    fifo: PyObject,
-    writes: Vec<NodeIndex>,
-    reads: Vec<NodeIndex>,
-}
-
-impl FifoIoNodes {
-    fn new(fifo: PyObject) -> Self {
-        FifoIoNodes {
-            fifo,
-            writes: Vec::new(),
-            reads: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AxiGenericIoNode {
-    node: NodeIndex,
-    range: AxiAddressRange,
-}
-
-#[derive(Clone, Default)]
-struct AxiInterfaceIoNodes {
-    readreqs: Vec<AxiGenericIoNode>,
-    reads: Vec<AxiGenericIoNode>,
-    writereqs: Vec<AxiGenericIoNode>,
-    writes: Vec<AxiGenericIoNode>,
-    writeresps: Vec<NodeIndex>,
-}
-
-#[derive(Clone, Copy)]
-struct NodeWithDelay {
-    node: NodeIndex,
-    delay: ClockCycle,
-}
-
-impl NodeWithDelay {
-    fn resolve<T: ops::Index<usize, Output = ClockCycle> + ?Sized>(
-        &self,
-        node_cycles: &T,
-    ) -> ClockCycle {
-        node_cycles[self.node.index()] + self.delay
-    }
-}
-
-impl ops::Add<ClockCycle> for NodeWithDelay {
-    type Output = Self;
-
-    fn add(self, rhs: ClockCycle) -> Self::Output {
-        NodeWithDelay {
-            node: self.node,
-            delay: self.delay + rhs,
-        }
-    }
+enum UncommittedModuleTiming {
+    Constant(ClockCycle),
+    Variable {
+        /// The first edge in this submodule; its source node defaults to 0 and
+        /// should be replaced with the real source node from the parent module
+        /// (unless this is the top-level module).
+        start_edge_index: usize,
+        end: NodeWithDelay,
+    },
 }
 
 #[derive(Clone)]
-struct ModuleInvocation {
-    py_trace: PyObject,
-    start: NodeWithDelay,
-    end: NodeWithDelay,
-    submodules: Vec<ModuleInvocation>,
+struct UncommittedModuleExecution {
+    /// The unique identifier of this module execution in the Python interface.
+    /// This can be any Python object.
+    key: PyObject,
+    start_delay: ClockCycle,
+    timing: UncommittedModuleTiming,
+    submodules: Vec<MaybeCommittedModuleExecution>,
     inherit_ap_continue: bool,
+}
+
+#[derive(Clone)]
+enum MaybeCommittedModuleExecution {
+    Uncommitted(UncommittedModuleExecution),
+    Committed(ModuleExecution),
 }
 
 #[derive(Clone, Default)]
 struct NodeMappings {
-    fifo_nodes: HashMap<Fifo, FifoIoNodes>,
-    axi_interface_nodes: HashMap<AxiInterface, AxiInterfaceIoNodes>,
+    fifo_nodes: FxHashMap<Fifo, FifoIoNodes>,
+    axi_interface_nodes: FxHashMap<AxiInterface, AxiInterfaceIoNodes>,
+}
+
+enum NodeCommitAction {
+    SetEdgeSource {
+        edge_index: usize,
+    },
+    /// This is necessary to handle submodules with timing of type
+    /// UncommittedModuleTiming::Constant. In this case, the submodule will
+    /// consist of a single edge where neither the source nor destination nodes
+    /// are committed at the time the submodule is committed. Once the source
+    /// node is committed, the edge must be updated with the committed node
+    /// index.
+    SetDownstreamEdgeSource {
+        /// The number of nodes between this node (the source node) and the
+        /// destination node of the edge to be updated.
+        offset: SimulationStage,
+        /// The index within [UncommittedNode#additional_sources] of the edge
+        /// to be updated.
+        index: usize,
+    },
+}
+
+enum NodeIo {
+    FifoRead {
+        fifo: Fifo,
+    },
+    FifoWrite {
+        fifo: Fifo,
+    },
+    AxiReadRequest {
+        interface: AxiInterface,
+        range: AxiAddressRange,
+    },
+    AxiRead {
+        interface: AxiInterface,
+        range: AxiAddressRange,
+    },
+    AxiWriteRequest {
+        interface: AxiInterface,
+        range: AxiAddressRange,
+    },
+    AxiWrite {
+        interface: AxiInterface,
+        range: AxiAddressRange,
+    },
+    AxiWriteResponse {
+        interface: AxiInterface,
+    },
+}
+
+#[derive(Default)]
+struct UncommittedNode {
+    actions: SmallVec<[NodeCommitAction; 4]>,
+    additional_sources: SmallVec<[NodeWithDelay; 4]>,
+    io: SmallVec<[NodeIo; 4]>,
+}
+
+impl UncommittedNode {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    fn commit(&self, position: NodeWithDelay) {
+        let min_in_degree = self.additional_sources.len() + 1;
+        let max_in_degree = min_in_degree + self.io.len();
+        let is_own_node = max_in_degree > 1;
+    }
 }
 
 #[pyclass]
@@ -437,11 +444,102 @@ struct NodeMappings {
 struct SimulationBuilder {
     graph: DiGraph<(), ClockCycle>,
     node_mappings: NodeMappings,
-    top_module: ModuleInvocation,
+    top_module: ModuleExecution,
     has_fifo_depths: bool,
     has_axi_delays: bool,
     is_ap_ctrl_chain: bool,
     num_parameters: u32,
+}
+
+/// An edge in the simulation graph.
+#[derive(Clone)]
+struct Edge {
+    /// The source node of this edge.
+    u: NodeIndex,
+    /// The destination node of this edge.
+    v: NodeIndex,
+    /// The weight of this edge, representing a minimum delay of some number of
+    /// clock cycles in the simulation graph.
+    weight: ClockCycle,
+}
+
+/// A work-in-progress simulation graph.
+#[derive(Clone)]
+struct SimulationGraphBuilder {
+    total_edge_count: usize,
+    node_in_degrees: Vec<DegreeBounds>,
+    cfg_edges: Vec<Edge>,
+}
+
+impl Default for SimulationGraphBuilder {
+    fn default() -> Self {
+        SimulationGraphBuilder {
+            total_edge_count: 0,
+            node_in_degrees: vec![DegreeBounds::default()],
+            cfg_edges: Vec::new(),
+        }
+    }
+}
+
+impl SimulationGraphBuilder {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    fn add_node(&mut self) -> usize {
+        let index = self.node_in_degrees.len();
+        self.node_in_degrees.push(0);
+        index
+    }
+
+    fn count_edge(&mut self, edge: &Edge) {
+        self.total_edge_count += 1;
+        self.node_in_degrees[edge.v.index()] += 1;
+    }
+}
+
+#[pyclass]
+#[derive(Clone, Default)]
+struct SimulationBuilder2 {
+    graph: SimulationGraphBuilder,
+    stack: Vec<StackFrame>,
+    top_module: Option<ModuleExecution>,
+}
+
+impl SimulationBuilder2 {
+    // fn commit(&mut self, mut stages: usize) {
+    //     let StackFrame { window, module } = self.stack.last_mut().unwrap();
+    //     while stages > 0 {
+    //         match window.pop_front() {
+    //             Some(stage) => {
+    //                 stage.commit(&mut self.graph, module);
+    //                 stages -= 1;
+    //             }
+    //             None => {
+    //                 module.end.delay += stages as ClockCycle;
+    //                 return;
+    //             }
+    //         }
+    //     }
+    // }
+
+    // fn call(&mut self, key: PyObject, inherit_ap_continue: bool) {
+    //     let start = match self.stack.last() {
+    //         Some(StackFrame { module, .. })
+    //     };
+    //     self.stack.push(StackFrame::new(key, ))
+    // }
+
+    // fn r#return(&mut self) {
+    //     let StackFrame { window, mut module } = self.stack.pop().unwrap();
+    //     for stage in window {
+    //         stage.commit(&mut self.graph, &mut module);
+    //     }
+    //     match self.stack.last_mut() {
+    //         Some(StackFrame { module: parent, .. }) => parent.submodules.push(module),
+    //         None => self.top_module = Some(module),
+    //     }
+    // }
 }
 
 #[pyclass]
@@ -554,7 +652,7 @@ enum ApContinue {
 }
 
 impl SimulationModule {
-    fn new(node_cycles: &[ClockCycle], module: &ModuleInvocation, ap_continue: ApContinue) -> Self {
+    fn new(node_cycles: &[ClockCycle], module: &ModuleExecution, ap_continue: ApContinue) -> Self {
         let start = module.start.resolve(node_cycles);
         let ap_done = module.end.resolve(node_cycles);
         let ap_continue = if module.inherit_ap_continue {
@@ -575,8 +673,8 @@ impl SimulationModule {
                 // - write_start (process_num = N + 1), which writes ap_start(?)
                 // Each contributes a cycle to the loop, except update_status, which takes
                 // SAXI_STATUS_UPDATE_OVERHEAD cycles.
-                let saxi_status_read_interval =
-                    SAXI_STATUS_UPDATE_OVERHEAD + (num_parameters as ClockCycle) + 1;
+                let num_parameters: ClockCycle = num_parameters.try_into().unwrap();
+                let saxi_status_read_interval = SAXI_STATUS_UPDATE_OVERHEAD + num_parameters + 1;
 
                 // The first status read occurs at cycle SAXI_STATUS_READ_DELAY after ap_start,
                 // so we calculate when the update_status process will first read ap_done.
@@ -597,7 +695,7 @@ impl SimulationModule {
         };
 
         SimulationModule {
-            trace: module.py_trace.clone(),
+            trace: module.key.clone(),
             start,
             end,
             submodules: module
@@ -643,8 +741,8 @@ impl SimulationBuilder {
             trace: &Trace,
             start: NodeWithDelay,
             inherit_ap_continue: bool,
-        ) -> PyResult<ModuleInvocation> {
-            let mut unreaped_submodules = HashMap::new();
+        ) -> PyResult<ModuleExecution> {
+            let mut unreaped_submodules = FxHashMap::new();
             let mut submodules = Vec::new();
             let mut previous_stage = 0;
             let mut current = start;
@@ -753,8 +851,8 @@ impl SimulationBuilder {
             }
 
             assert!(unreaped_submodules.is_empty());
-            Ok(ModuleInvocation {
-                py_trace: trace.py_trace.clone(),
+            Ok(ModuleExecution {
+                key: trace.py_trace.clone(),
                 start,
                 end: current,
                 submodules,
