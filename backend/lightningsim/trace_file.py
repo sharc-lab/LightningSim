@@ -1,6 +1,6 @@
 from asyncio import Future, StreamReader, get_running_loop
 from bisect import bisect, insort
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from operator import attrgetter
 from time import time
 from typing import Callable, Dict, List, Set, Tuple, TypeAlias, Union
@@ -14,6 +14,7 @@ TraceMetadata: TypeAlias = Union[
     "FIFOIOMetadata",
     "AXIIOMetadata",
     "AXIWriteRespMetadata",
+    "LoopMetadata",
 ]
 
 
@@ -44,6 +45,12 @@ class AXIIOMetadata:
 @dataclass(frozen=True, slots=True)
 class AXIWriteRespMetadata:
     interface: "AXIInterface"
+
+@dataclass(frozen=True, slots=True)
+class LoopMetadata:
+    name: str
+    tripcount: int
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +126,7 @@ async def read_trace(reader: StreamReader, solution: Solution):
         elif type == "ap_ctrl_chain":
             is_ap_ctrl_chain = True
 
-        elif type == "trace_bb":
+        elif type in ("trace_bb", "loop_bb"):
             function, basic_block = metadata_list
             basic_block = int(basic_block)
             if function not in function_parses:
@@ -164,7 +171,13 @@ async def read_trace(reader: StreamReader, solution: Solution):
                 bisect(axi_interfaces, address, key=address_getter) - 1
             ]
             trace.append(axi_writeresp_cache[interface])
-
+        elif type in ("loop", "end_loop_blocks", "end_loop"):
+            loopname, tripcount = metadata_list
+            tripcount = int(tripcount)
+            if function not in function_parses:
+                function_parses[function] = solution.get_function(function)
+            entry = TraceEntry(type, LoopMetadata(loopname, tripcount))
+            trace.append(entry)
         else:
             raise ValueError(f"unknown trace entry type {type!r}")
 
@@ -224,15 +237,8 @@ class ResolvedEvent:
     type: str
     instruction: Instruction
     metadata: ResolvedEventMetadata
-    parent: "ResolvedBlock"
-
-    @property
-    def start_stage(self):
-        return self.parent.start_stage + self.instruction.latency.relative_start
-
-    @property
-    def end_stage(self):
-        return self.parent.start_stage + self.instruction.latency.relative_end
+    end_stage: int
+    start_stage: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,13 +257,23 @@ class ResolvedBlock:
     basic_block: BasicBlock
     events: List[ResolvedEvent]
     end_stage: int
-
-    @property
-    def start_stage(self):
-        return self.end_stage - self.basic_block.length
+    start_stage: int
 
     def __repr__(self):
         return f"<ResolvedBlock {self.basic_block.name} in {self.basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {len(self.events)} event(s)>"
+
+@dataclass(frozen=True, slots=True)
+class UnresolvedLoop:
+    name : str
+    tripcount : int
+    ii: int
+    blocks: List[ResolvedBlock]
+    events: List[ResolvedEvent]
+    end_stage: int
+    start_stage: int
+
+    def __repr__(self):
+        return f"<ResolvedLoop {self.name} in {self.blocks[0].basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {self.tripcount} interations>"
 
 
 @dataclass(slots=True)
@@ -288,6 +304,8 @@ class ResolvedTrace:
 class StackFrame:
     resolved_trace: List[ResolvedBlock] = field(default_factory=list)
     current_block: ResolvedBlock | None = None
+    current_loop: UnresolvedLoop | None = None
+    loop_idx: int = 0
     dynamic_stage: int = 0
     static_stage: int = 0
     latest_dynamic_stage: int = 0
@@ -310,6 +328,26 @@ async def resolve_trace(
         nonlocal i, num_stall_events
         start_time = time()
         for i, entry in trace_iter:
+            current_loop = stack[-1].current_loop
+            if entry.type == "end_loop":
+                frame = stack[-1]
+                #convert unresolved loop to resolved block
+                resolved_block = ResolvedBlock(
+                    None, current_loop.events, current_loop.end_stage, current_loop.start_stage 
+                )
+                frame.resolved_trace.append(resolved_block)
+
+                frame.current_block = None
+                frame.current_loop = None
+                frame.loop_idx = 0
+
+                frame.static_stage = current_loop.blocks[-1].basic_block.end
+                frame.dynamic_stage = current_loop.end_stage
+                if frame.dynamic_stage >= frame.latest_dynamic_stage:
+                    frame.latest_dynamic_stage = frame.dynamic_stage
+                    frame.latest_static_stage = frame.static_stage
+                continue
+
             current_resolved_block = stack[-1].current_block
 
             if current_resolved_block is not None:
@@ -320,118 +358,168 @@ async def resolve_trace(
                 next_frame: StackFrame | None = None
                 if event_instruction.opcode == "call":
                     next_frame = StackFrame()
+                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
+                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
+                    if current_loop is not None:
+                        end_stage+=current_loop.ii*frame.loop_idx
+                        start_stage+=current_loop.ii*frame.loop_idx
                     resolved_events.append(
                         ResolvedEvent(
                             type="call",
                             instruction=event_instruction,
                             metadata=SubcallMetadata(next_frame.resolved_trace),
-                            parent=current_resolved_block,
+                            end_stage=end_stage,
+                            start_stage=start_stage
                         )
                     )
                 else:
                     if entry.type == "trace_bb":
                         raise ValueError(f"unexpected trace_bb during trace resolution")
+                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
+                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
+                    if current_loop is not None:
+                        end_stage+=current_loop.ii*frame.loop_idx
+                        start_stage+=current_loop.ii*frame.loop_idx
+                    
                     resolved_events.append(
                         ResolvedEvent(
                             type=entry.type,
                             instruction=event_instruction,
                             metadata=entry.metadata,
-                            parent=current_resolved_block,
+                            end_stage=end_stage,
+                            start_stage=start_stage
                         )
                     )
-                num_stall_events += 1
 
+                num_stall_events += 1
                 if len(resolved_events) >= len(events):
                     frame = stack[-1]
-                    frame.current_block = None
-                    if basic_block.terminator.opcode in ("ret", "return"):
-                        stack.pop()
-                        if not stack and not next_frame:
-                            # we only handle the first top-level call for now
-                            return True
+                    if current_loop is not None:
+                        current_loop.events.extend(resolved_events)
+                        current_resolved_block.events.clear()
+                        idx = current_loop.blocks.index(frame.current_block) +1
+                        while (True):
+                            if idx == len(current_loop.blocks):
+                                frame.loop_idx +=1
+                            if len(current_loop.blocks[idx%len(current_loop.blocks)].basic_block.events) >0:
+                                frame.current_block = current_loop.blocks[idx]
+                                break
+                            idx += 1
+                    else:
+                        frame.current_block = None
+                        if basic_block.terminator.opcode in ("ret", "return"):
+                            stack.pop()
+                            if not stack and not next_frame:
+                                # we only handle the first top-level call for now
+                                return True
 
                 if next_frame is not None:
                     stack.append(next_frame)
                     current_resolved_block = None
 
             if current_resolved_block is None:
-                if entry.type != "trace_bb":
-                    raise ValueError(f"expected trace_bb during trace resolution")
+                if entry.type == "loop":
+                    current_loop = UnresolvedLoop(
+                        entry.metadata.name, entry.metadata.tripcount, 0, [], [],  None, frame.dynamic_stage
+                    )
+                    frame = stack[-1]
+                    frame.current_loop = current_loop
+                elif entry.type == "end_loop_blocks":
+                    loop_overlap_length = 0
+                    if current_loop.blocks[0].basic_block.pipeline is not None:
+                        loop_overlap_length = current_loop.blocks[-1].basic_block.end-current_loop.blocks[0].basic_block.start-current_loop.blocks[0].basic_block.pipeline.ii
+                        current_loop = replace(current_loop, ii=current_loop.blocks[0].basic_block.pipeline.ii)
+                    if loop_overlap_length < 0:
+                        loop_overlap_length = 0
+                    frame.loop_idx = 0
+                    loop_end_stage = (loop_overlap_length)+current_loop.ii*(current_loop.tripcount)
+                    frame.current_loop = replace(current_loop, end_stage= loop_end_stage)
+                    for resolved_block in current_loop.blocks:
+                        if len(resolved_block.basic_block.events) >0:
+                            frame.current_block = resolved_block
+                            break
+                elif entry.type in ("trace_bb", "loop_bb"):
+                    # `frame` holds the current state of the trace resolution.
+                    frame = stack[-1]
+                    function = trace.functions[entry.metadata.function]
+                    basic_block = function.llvm_indexed_basic_blocks[
+                        entry.metadata.basic_block
+                    ]
+                    pipeline = basic_block.pipeline
 
-                # `frame` holds the current state of the trace resolution.
-                frame = stack[-1]
-                function = trace.functions[entry.metadata.function]
-                basic_block = function.llvm_indexed_basic_blocks[
-                    entry.metadata.basic_block
-                ]
-                pipeline = basic_block.pipeline
+                    if frame.pipeline != pipeline:
+                        # Either we are exiting a pipeline or entering one.
+                        # Either way, the stages of the pipelined region should
+                        # have no overlap with the stages of the non-pipelined region.
+                        frame.dynamic_stage = frame.latest_dynamic_stage
+                        frame.static_stage = frame.latest_static_stage
+                        frame.pipeline = basic_block.pipeline
 
-                if frame.pipeline != pipeline:
-                    # Either we are exiting a pipeline or entering one.
-                    # Either way, the stages of the pipelined region should
-                    # have no overlap with the stages of the non-pipelined region.
-                    frame.dynamic_stage = frame.latest_dynamic_stage
-                    frame.static_stage = frame.latest_static_stage
-                    frame.pipeline = basic_block.pipeline
+                    # By default, the overlap is calculated naively as the
+                    # difference between the end of the previous block and the
+                    # start of the current block.
+                    overlap = frame.static_stage - basic_block.start
 
-                # By default, the overlap is calculated naively as the
-                # difference between the end of the previous block and the
-                # start of the current block.
-                overlap = frame.static_stage - basic_block.start
+                    # We break this rule in three cases:
+                    # 1. In a non-pipelined region, if the overlap < -1
+                    #    (i.e., distance > 1), it would imply there are empty
+                    #    stages between the previous block and the current block.
+                    #    This doesn't happen; the FSM skips those stages. So we
+                    #    clamp the overlap to -1.
+                    # 2. In a non-pipelined region, if the basic block has already
+                    #    been seen, it would imply that the FSM has already visited
+                    #    the block; a new loop iteration has started, and it shares
+                    #    no overlap with any previous stage.
+                    # 3. In a pipelined region, if the basic block has already been
+                    #    seen, a new loop iteration has started, which has to start
+                    #    pipeline.ii stages after the previous iteration.
+                    if pipeline is None and (
+                        overlap < -1 or basic_block in frame.blocks_seen
+                    ):
+                        # Handles cases 1 and 2.
+                        overlap = -1
+                    elif pipeline is not None and basic_block in frame.blocks_seen:
+                        # Handles case 3.
+                        assert pipeline.ii is not None
+                        overlap -= pipeline.ii
+                    # This actually updates the state of the trace resolution.
+                    frame.dynamic_stage += basic_block.length - overlap
 
-                # We break this rule in three cases:
-                # 1. In a non-pipelined region, if the overlap < -1
-                #    (i.e., distance > 1), it would imply there are empty
-                #    stages between the previous block and the current block.
-                #    This doesn't happen; the FSM skips those stages. So we
-                #    clamp the overlap to -1.
-                # 2. In a non-pipelined region, if the basic block has already
-                #    been seen, it would imply that the FSM has already visited
-                #    the block; a new loop iteration has started, and it shares
-                #    no overlap with any previous stage.
-                # 3. In a pipelined region, if the basic block has already been
-                #    seen, a new loop iteration has started, which has to start
-                #    pipeline.ii stages after the previous iteration.
-                if pipeline is None and (
-                    overlap < -1 or basic_block in frame.blocks_seen
-                ):
-                    # Handles cases 1 and 2.
-                    overlap = -1
-                elif pipeline is not None and basic_block in frame.blocks_seen:
-                    # Handles case 3.
-                    assert pipeline.ii is not None
-                    overlap -= pipeline.ii
+                    frame.static_stage = basic_block.end
 
-                # If we are entering a new loop iteration, we reset the set of
-                # basic blocks already seen.
-                if basic_block in frame.blocks_seen:
-                    frame.blocks_seen.clear()
-                frame.blocks_seen.add(basic_block)
+                    # We keep track of the latest stage seen in the trace; this is
+                    # necessary for the above step where we ensure that pipelined
+                    # regions don't overlap with non-pipelined regions.
+                    if frame.dynamic_stage >= frame.latest_dynamic_stage:
+                        frame.latest_dynamic_stage = frame.dynamic_stage
+                        frame.latest_static_stage = frame.static_stage
 
-                # This actually updates the state of the trace resolution.
-                frame.dynamic_stage += basic_block.length - overlap
-                frame.static_stage = basic_block.end
+                    if entry.type == "trace_bb":
+                        # If we are entering a new loop iteration, we reset the set of
+                        # basic blocks already seen.
+                        if basic_block in frame.blocks_seen:
+                            frame.blocks_seen.clear()
+                        frame.blocks_seen.add(basic_block)
+                    
+                        current_resolved_block = ResolvedBlock(
+                            basic_block, [], frame.dynamic_stage, frame.dynamic_stage - basic_block.length
+                        )
+                        frame.current_block = current_resolved_block
+                        frame.resolved_trace.append(current_resolved_block)
 
-                # We keep track of the latest stage seen in the trace; this is
-                # necessary for the above step where we ensure that pipelined
-                # regions don't overlap with non-pipelined regions.
-                if frame.dynamic_stage >= frame.latest_dynamic_stage:
-                    frame.latest_dynamic_stage = frame.dynamic_stage
-                    frame.latest_static_stage = frame.static_stage
-
-                current_resolved_block = ResolvedBlock(
-                    basic_block, [], frame.dynamic_stage
-                )
-                frame.current_block = current_resolved_block
-                frame.resolved_trace.append(current_resolved_block)
-
-                if not basic_block.events:
-                    frame.current_block = None
-                    if basic_block.terminator.opcode in ("ret", "return"):
-                        stack.pop()
-                        if not stack:
-                            # we only handle the first top-level call for now
-                            return True
+                        if not basic_block.events:
+                            frame.current_block = None
+                            if basic_block.terminator.opcode in ("ret", "return"):
+                                stack.pop()
+                                if not stack:
+                                    # we only handle the first top-level call for now
+                                    return True
+                    elif entry.type == "loop_bb":
+                        resolved_block = ResolvedBlock(
+                            basic_block, [], frame.dynamic_stage, frame.dynamic_stage - basic_block.length
+                        )
+                        current_loop.blocks.append(resolved_block)
+                    
 
             if time() - start_time >= deadline:
                 return False
