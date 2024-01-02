@@ -183,10 +183,10 @@ impl SimulationBuilder {
         }
     }
 
-    pub fn r#return(&mut self, module_name: String) {
+    pub fn return_(&mut self, module_name: String, end_stage: SimulationStage) {
         if let Some(frame) = self.stack.pop() {
             let parent = self.stack.last_mut();
-            self.builders.r#return(frame, parent, module_name);
+            self.builders.return_(frame, parent, module_name, end_stage);
         }
     }
 
@@ -421,17 +421,18 @@ impl SimulationComponentBuilders {
         StackFrame::new(module_key, end_dynamic_stage, start_edge)
     }
 
-    fn r#return(
+    fn return_(
         &mut self,
         mut frame: StackFrame,
         parent: Option<&mut StackFrame>,
         module_name: String,
+        end_stage: SimulationStage,
     ) {
         while let Some(uncommitted_node) = frame.window.pop_front() {
             let advance_by = if !frame.window.is_empty() { 1 } else { 0 };
             self.commit_node(&mut frame, uncommitted_node, advance_by);
         }
-        if let Some(remaining_stages) = frame.parent_end.checked_sub(frame.offset) {
+        if let Some(remaining_stages) = end_stage.checked_sub(frame.offset) {
             let remaining_delay = remaining_stages.into();
             frame.current_time += remaining_delay;
             self.edges.add_delay(frame.current_edge, remaining_delay);
