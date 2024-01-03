@@ -345,13 +345,20 @@ async def resolve_trace(
                 event_instruction = events[current_resolved_block.num_events]
                 next_frame: StackFrame | None = None
                 builder_call_args: Tuple[int, int, int, int, bool] | None = None
+
+                end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
+                start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
+                if current_loop is not None:
+                    end_stage+=current_loop.ii*frame.loop_idx
+                    start_stage+=current_loop.ii*frame.loop_idx
+                safe_offset = start_stage - (
+                    basic_block.end
+                    - basic_block.length
+                    + event_instruction.latency.relative_start
+                )
+
                 if event_instruction.opcode == "call":
                     next_frame = StackFrame()
-                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
-                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
-                    if current_loop is not None:
-                        end_stage+=current_loop.ii*frame.loop_idx
-                        start_stage+=current_loop.ii*frame.loop_idx
                     region = event_instruction.basic_block.region
                     is_sequential = region.ii is None and region.dataflow is None
                     is_dataflow_sink = (
@@ -361,37 +368,31 @@ async def resolve_trace(
                     start_delay = 1 if is_sequential else 0
                     inherit_ap_continue = is_dataflow_sink
                     builder_call_args = (
-                        event_instruction.latency.start,
+                        safe_offset,
                         start_stage,
                         end_stage,
                         start_delay,
                         inherit_ap_continue,
                     )
                 else:
-                    end_stage=current_resolved_block.start_stage + event_instruction.latency.relative_end
-                    start_stage=current_resolved_block.start_stage + event_instruction.latency.relative_start
-                    if current_loop is not None:
-                        end_stage+=current_loop.ii*frame.loop_idx
-                        start_stage+=current_loop.ii*frame.loop_idx
-                    
                     if entry.type == "fifo_read":
                         assert isinstance(entry.metadata, FIFOIOMetadata)
                         builder.add_fifo_read(
-                            event_instruction.latency.end,
+                            safe_offset,
                             end_stage,
                             entry.metadata.fifo.id,
                         )
                     elif entry.type == "fifo_write":
                         assert isinstance(entry.metadata, FIFOIOMetadata)
                         builder.add_fifo_write(
-                            event_instruction.latency.end,
+                            safe_offset,
                             end_stage,
                             entry.metadata.fifo.id,
                         )
                     elif entry.type == "axi_readreq":
                         assert isinstance(entry.metadata, AXIRequestMetadata)
                         builder.add_axi_readreq(
-                            event_instruction.latency.start,
+                            safe_offset,
                             start_stage,
                             entry.metadata.interface.address,
                             entry.metadata,
@@ -399,7 +400,7 @@ async def resolve_trace(
                     elif entry.type == "axi_writereq":
                         assert isinstance(entry.metadata, AXIRequestMetadata)
                         builder.add_axi_writereq(
-                            event_instruction.latency.start,
+                            safe_offset,
                             start_stage,
                             entry.metadata.interface.address,
                             entry.metadata,
@@ -407,21 +408,21 @@ async def resolve_trace(
                     elif entry.type == "axi_read":
                         assert isinstance(entry.metadata, AXIIOMetadata)
                         builder.add_axi_read(
-                            event_instruction.latency.end,
+                            safe_offset,
                             end_stage,
                             entry.metadata.interface.address,
                         )
                     elif entry.type == "axi_write":
                         assert isinstance(entry.metadata, AXIIOMetadata)
                         builder.add_axi_write(
-                            event_instruction.latency.end,
+                            safe_offset,
                             end_stage,
                             entry.metadata.interface.address,
                         )
                     elif entry.type == "axi_writeresp":
                         assert isinstance(entry.metadata, AXIIOMetadata)
                         builder.add_axi_writeresp(
-                            event_instruction.latency.end,
+                            safe_offset,
                             end_stage,
                             entry.metadata.interface.address,
                         )

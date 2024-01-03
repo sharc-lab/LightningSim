@@ -34,12 +34,6 @@ pub struct StackFrame {
     pub window: VecDeque<UncommittedNode>,
 }
 
-#[derive(Clone, Copy)]
-pub struct SimulationStagePair {
-    pub static_stage: SimulationStage,
-    pub dynamic_stage: SimulationStage,
-}
-
 impl StackFrame {
     pub fn new(key: ModuleKey, parent_end: SimulationStage, start_edge: IncompleteEdgeKey) -> Self {
         Self {
@@ -52,11 +46,11 @@ impl StackFrame {
         }
     }
 
-    pub fn add_event(&mut self, static_stage: SimulationStage, event: Event) {
-        let static_stage = static_stage.try_into().unwrap();
-        if static_stage >= self.window.len() {
-            self.window.resize_with(static_stage + 1, Default::default);
+    pub fn add_event(&mut self, stage: SimulationStage, event: Event) {
+        let relative_stage = (stage - self.offset).try_into().unwrap();
+        if relative_stage >= self.window.len() {
+            self.window.resize_with(relative_stage + 1, Default::default);
         }
-        self.window[static_stage].events.push(event);
+        self.window[relative_stage].events.push(event);
     }
 }

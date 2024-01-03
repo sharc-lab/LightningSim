@@ -3,36 +3,32 @@ from .trace_file import AXIRequestMetadata, SimulationParameters
 
 class SimulationBuilder:
     def __init__(self): ...
-    def add_fifo_write(self, static_stage: int, dynamic_stage: int, fifo_id: int): ...
-    def add_fifo_read(self, static_stage: int, dynamic_stage: int, fifo_id: int): ...
+    def add_fifo_write(self, safe_offset: int, stage: int, fifo_id: int): ...
+    def add_fifo_read(self, safe_offset: int, stage: int, fifo_id: int): ...
     def add_axi_readreq(
         self,
-        static_stage: int,
-        dynamic_stage: int,
+        safe_offset: int,
+        stage: int,
         interface_address: int,
         request: AXIRequestMetadata,
     ): ...
     def add_axi_writereq(
         self,
-        static_stage: int,
-        dynamic_stage: int,
+        safe_offset: int,
+        stage: int,
         interface_address: int,
         request: AXIRequestMetadata,
     ): ...
-    def add_axi_read(
-        self, static_stage: int, dynamic_stage: int, interface_address: int
-    ): ...
-    def add_axi_write(
-        self, static_stage: int, dynamic_stage: int, interface_address: int
-    ): ...
+    def add_axi_read(self, safe_offset: int, stage: int, interface_address: int): ...
+    def add_axi_write(self, safe_offset: int, stage: int, interface_address: int): ...
     def add_axi_writeresp(
-        self, static_stage: int, dynamic_stage: int, interface_address: int
+        self, safe_offset: int, stage: int, interface_address: int
     ): ...
     def call(
         self,
-        start_static_stage: int,
-        start_dynamic_stage: int,
-        end_dynamic_stage: int,
+        safe_offset: int,
+        start_stage: int,
+        end_stage: int,
         start_delay: int,
         inherit_ap_continue: bool,
     ): ...

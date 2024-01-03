@@ -78,34 +78,33 @@ impl SimulationBuilder {
 
     pub fn add_fifo_write(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         fifo_id: FifoId,
     ) {
         if let Some(frame) = self.stack.last_mut() {
             let fifo = Fifo { id: fifo_id };
             self.builders
-                .add_fifo_write(frame, static_stage, dynamic_stage, fifo);
+                .add_fifo_write(frame, safe_offset, stage, fifo);
         }
     }
 
     pub fn add_fifo_read(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         fifo_id: FifoId,
     ) {
         if let Some(frame) = self.stack.last_mut() {
             let fifo = Fifo { id: fifo_id };
-            self.builders
-                .add_fifo_read(frame, static_stage, dynamic_stage, fifo);
+            self.builders.add_fifo_read(frame, safe_offset, stage, fifo);
         }
     }
 
     pub fn add_axi_readreq(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface_address: AxiAddress,
         request: AxiRequestRange,
     ) {
@@ -114,14 +113,14 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_readreq(frame, static_stage, dynamic_stage, interface, request);
+                .add_axi_readreq(frame, safe_offset, stage, interface, request);
         }
     }
 
     pub fn add_axi_writereq(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface_address: AxiAddress,
         request: AxiRequestRange,
     ) {
@@ -130,14 +129,14 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_writereq(frame, static_stage, dynamic_stage, interface, request);
+                .add_axi_writereq(frame, safe_offset, stage, interface, request);
         }
     }
 
     pub fn add_axi_read(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
@@ -145,14 +144,14 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_read(frame, static_stage, dynamic_stage, interface);
+                .add_axi_read(frame, safe_offset, stage, interface);
         }
     }
 
     pub fn add_axi_write(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
@@ -160,14 +159,14 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_write(frame, static_stage, dynamic_stage, interface);
+                .add_axi_write(frame, safe_offset, stage, interface);
         }
     }
 
     pub fn add_axi_writeresp(
         &mut self,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
@@ -175,24 +174,24 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_writeresp(frame, static_stage, dynamic_stage, interface);
+                .add_axi_writeresp(frame, safe_offset, stage, interface);
         }
     }
 
     pub fn call(
         &mut self,
-        start_static_stage: SimulationStage,
-        start_dynamic_stage: SimulationStage,
-        end_dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        start_stage: SimulationStage,
+        end_stage: SimulationStage,
         start_delay: ClockCycle,
         inherit_ap_continue: bool,
     ) {
         if let Some(parent) = self.stack.last_mut() {
             let frame = self.builders.call(
                 parent,
-                start_static_stage,
-                start_dynamic_stage,
-                end_dynamic_stage,
+                safe_offset,
+                start_stage,
+                end_stage,
                 start_delay,
                 inherit_ap_continue,
             );
@@ -222,8 +221,8 @@ impl SimulationComponentBuilders {
     fn add_fifo_write(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         fifo: Fifo,
     ) {
         let InsertedFifoWrite { index, raw_edge } =
@@ -235,8 +234,8 @@ impl SimulationComponentBuilders {
         });
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::FifoWrite {
                 fifo,
                 index,
@@ -248,8 +247,8 @@ impl SimulationComponentBuilders {
     fn add_fifo_read(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         fifo: Fifo,
     ) {
         let InsertedFifoRead { index, raw_edge } =
@@ -261,8 +260,8 @@ impl SimulationComponentBuilders {
         });
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::FifoRead {
                 fifo,
                 index,
@@ -274,8 +273,8 @@ impl SimulationComponentBuilders {
     fn add_axi_readreq(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface: AxiInterface,
         request: AxiRequestRange,
     ) {
@@ -295,8 +294,8 @@ impl SimulationComponentBuilders {
         builder.add_burst(burst_count);
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::AxiReadRequest {
                 interface,
                 index,
@@ -308,8 +307,8 @@ impl SimulationComponentBuilders {
     fn add_axi_writereq(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface: AxiInterface,
         request: AxiRequestRange,
     ) {
@@ -320,8 +319,8 @@ impl SimulationComponentBuilders {
             .insert_writereq(request);
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::AxiWriteRequest { interface, index },
         );
     }
@@ -329,8 +328,8 @@ impl SimulationComponentBuilders {
     fn add_axi_read(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface: AxiInterface,
     ) {
         let InsertedAxiRead {
@@ -348,8 +347,8 @@ impl SimulationComponentBuilders {
         });
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::AxiRead {
                 interface,
                 index,
@@ -363,8 +362,8 @@ impl SimulationComponentBuilders {
     fn add_axi_write(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface: AxiInterface,
     ) {
         let InsertedAxiWrite {
@@ -380,8 +379,8 @@ impl SimulationComponentBuilders {
         });
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::AxiWrite {
                 interface,
                 index,
@@ -393,8 +392,8 @@ impl SimulationComponentBuilders {
     fn add_axi_writeresp(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         interface: AxiInterface,
     ) {
         let InsertedAxiWriteResp {
@@ -403,8 +402,8 @@ impl SimulationComponentBuilders {
         } = self.axi.entry(interface).or_default().insert_writeresp();
         self.add_event(
             frame,
-            static_stage,
-            dynamic_stage,
+            safe_offset,
+            stage,
             Event::AxiWriteResponse {
                 interface,
                 index,
@@ -417,9 +416,9 @@ impl SimulationComponentBuilders {
     fn call(
         &mut self,
         parent: &mut StackFrame,
-        start_static_stage: SimulationStage,
-        start_dynamic_stage: SimulationStage,
-        end_dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        start_stage: SimulationStage,
+        end_stage: SimulationStage,
         start_delay: ClockCycle,
         inherit_ap_continue: bool,
     ) -> StackFrame {
@@ -430,14 +429,14 @@ impl SimulationComponentBuilders {
                 .insert_module(Some(parent.key), start_delay, inherit_ap_continue);
         self.add_event(
             parent,
-            start_static_stage,
-            start_dynamic_stage,
+            safe_offset,
+            start_stage,
             Event::SubcallStart {
                 module_key,
                 edge: start_edge,
             },
         );
-        StackFrame::new(module_key, end_dynamic_stage, start_edge)
+        StackFrame::new(module_key, end_stage, start_edge)
     }
 
     fn return_(
@@ -463,7 +462,7 @@ impl SimulationComponentBuilders {
 
         match parent {
             Some(parent) => parent.add_event(
-                frame.parent_end - parent.offset,
+                frame.parent_end,
                 Event::SubcallEnd {
                     edge: frame.current_edge,
                 },
@@ -634,12 +633,12 @@ impl SimulationComponentBuilders {
     fn add_event(
         &mut self,
         frame: &mut StackFrame,
-        static_stage: SimulationStage,
-        dynamic_stage: SimulationStage,
+        safe_offset: SimulationStage,
+        stage: SimulationStage,
         event: Event,
     ) {
-        self.commit_until(frame, dynamic_stage - static_stage);
-        frame.add_event(static_stage, event);
+        self.commit_until(frame, safe_offset);
+        frame.add_event(stage, event);
     }
 }
 
