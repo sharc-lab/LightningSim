@@ -47,13 +47,8 @@ impl ModuleBuilder {
         self.uncommitted[key].end = end;
     }
 
-    pub fn defer_events<I>(&mut self, key: ModuleKey, delay: ClockCycle, events: I)
-    where
-        I: Iterator<Item = Event>,
-    {
-        self.uncommitted[key]
-            .events
-            .extend(events.map(|event| (delay, event)));
+    pub fn defer_event(&mut self, key: ModuleKey, delay: ClockCycle, event: Event) {
+        self.uncommitted[key].events.push((delay, event));
     }
 
     /// Given a module key and the parent node of the module with that key,

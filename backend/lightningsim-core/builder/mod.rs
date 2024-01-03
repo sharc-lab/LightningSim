@@ -24,9 +24,9 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    axi_interface::{AxiInterface, AxiInterfaceIoNodes},
+    axi_interface::{AxiAddress, AxiInterface, AxiInterfaceIoNodes},
     edge::Edge,
-    fifo::{Fifo, FifoIoNodes},
+    fifo::{Fifo, FifoId, FifoIoNodes},
     node::{NodeIndex, NodeWithDelay},
     ClockCycle, CompiledSimulation, SimulationStage,
 };
@@ -80,9 +80,10 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        fifo: Fifo,
+        fifo_id: FifoId,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let fifo = Fifo { id: fifo_id };
             self.builders
                 .add_fifo_write(frame, static_stage, dynamic_stage, fifo);
         }
@@ -92,9 +93,10 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        fifo: Fifo,
+        fifo_id: FifoId,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let fifo = Fifo { id: fifo_id };
             self.builders
                 .add_fifo_read(frame, static_stage, dynamic_stage, fifo);
         }
@@ -104,10 +106,13 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        interface: AxiInterface,
+        interface_address: AxiAddress,
         request: AxiRequestRange,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let interface = AxiInterface {
+                address: interface_address,
+            };
             self.builders
                 .add_axi_readreq(frame, static_stage, dynamic_stage, interface, request);
         }
@@ -117,10 +122,13 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        interface: AxiInterface,
+        interface_address: AxiAddress,
         request: AxiRequestRange,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let interface = AxiInterface {
+                address: interface_address,
+            };
             self.builders
                 .add_axi_writereq(frame, static_stage, dynamic_stage, interface, request);
         }
@@ -130,9 +138,12 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        interface: AxiInterface,
+        interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let interface = AxiInterface {
+                address: interface_address,
+            };
             self.builders
                 .add_axi_read(frame, static_stage, dynamic_stage, interface);
         }
@@ -142,9 +153,12 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        interface: AxiInterface,
+        interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let interface = AxiInterface {
+                address: interface_address,
+            };
             self.builders
                 .add_axi_write(frame, static_stage, dynamic_stage, interface);
         }
@@ -154,9 +168,12 @@ impl SimulationBuilder {
         &mut self,
         static_stage: SimulationStage,
         dynamic_stage: SimulationStage,
-        interface: AxiInterface,
+        interface_address: AxiAddress,
     ) {
         if let Some(frame) = self.stack.last_mut() {
+            let interface = AxiInterface {
+                address: interface_address,
+            };
             self.builders
                 .add_axi_writeresp(frame, static_stage, dynamic_stage, interface);
         }
@@ -265,6 +282,7 @@ impl SimulationComponentBuilders {
         let builder = self.axi.entry(interface).or_default();
         let InsertedAxiReadReq {
             index,
+            burst_count,
             read_edge: read_edge_needed,
         } = builder.insert_readreq(request);
         let read_edge = self
@@ -274,6 +292,7 @@ impl SimulationComponentBuilders {
         while let Some(rctl_edge) = builder.pop_rctl_edge() {
             self.edges.void_destination(rctl_edge);
         }
+        builder.add_burst(burst_count);
         self.add_event(
             frame,
             static_stage,
@@ -450,6 +469,13 @@ impl SimulationComponentBuilders {
                 },
             ),
             None => {
+                let deferred = self
+                    .modules
+                    .commit_module(frame.key, NodeWithDelay { node: 0, delay: 0 });
+                for (node, event) in deferred {
+                    debug_assert!(!event.has_in_edge());
+                    self.commit_event(event, node);
+                }
                 self.end_node = Some(self.edges.insert_node());
                 self.edges.push_destination(frame.current_edge);
             }
@@ -561,7 +587,8 @@ impl SimulationComponentBuilders {
     ) {
         frame.offset += advance_by;
         let delay = advance_by.into();
-        let commit_time = if uncommitted_node.is_own_node() {
+        let unstalled_time = frame.current_time;
+        let stalled_time = if uncommitted_node.is_own_node() {
             let node = self.edges.insert_node();
             self.edges.push_destination(frame.current_edge);
             let node_with_delay = NodeWithDelay { node, delay };
@@ -572,19 +599,19 @@ impl SimulationComponentBuilders {
             NodeTime::Absolute(NodeWithDelay { node, delay: 0 })
         } else {
             self.edges.add_delay(frame.current_edge, delay);
-            let current_time = frame.current_time;
             frame.current_time += delay;
-            current_time
+            unstalled_time
         };
-        match commit_time {
-            NodeTime::Absolute(node) => {
-                for event in uncommitted_node.events {
-                    self.commit_event(event, node);
+        for event in uncommitted_node.events {
+            let event_time = match event.is_stalled() {
+                true => stalled_time,
+                false => unstalled_time,
+            };
+            match event_time {
+                NodeTime::Absolute(node) => self.commit_event(event, node),
+                NodeTime::RelativeToStart(delay) => {
+                    self.modules.defer_event(frame.key, delay, event);
                 }
-            }
-            NodeTime::RelativeToStart(delay) => {
-                let events = uncommitted_node.events.into_iter();
-                self.modules.defer_events(frame.key, delay, events);
             }
         }
     }

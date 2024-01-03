@@ -26,7 +26,7 @@ extern "C"
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
-            fprintf(fd, "axi_readreq\t%p\t%" PRIu32 "\n", addr, length);
+            fprintf(fd, "axi_readreq\t%p\t%" PRIu32 "\t%" PRIu32 "\n", addr, increment, count);
         }
     }
 
@@ -37,7 +37,7 @@ extern "C"
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
-            fprintf(fd, "axi_writereq\t%p\t%" PRIu32 "\n", addr, length);
+            fprintf(fd, "axi_writereq\t%p\t%" PRIu32 "\t%" PRIu32 "\n", addr, increment, count);
         }
     }
 
@@ -52,7 +52,7 @@ extern "C"
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
-            fprintf(fd, "axi_read\t%p\t%" PRIu32 "\t%" PRIu32 "\n", addr, req.offset, req.increment);
+            fprintf(fd, "axi_read\t%p\n", addr);
         }
 
         void* read_addr = static_cast<void*>(static_cast<uint8_t*>(addr) + req.offset);
@@ -72,7 +72,7 @@ extern "C"
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
-            fprintf(fd, "axi_write\t%p\t%" PRIu32 "\t%" PRIu32 "\n", addr, req.offset, req.increment);
+            fprintf(fd, "axi_write\t%p\n", addr);
         }
 
         void* write_addr = static_cast<void*>(static_cast<uint8_t*>(addr) + req.offset);

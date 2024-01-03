@@ -56,6 +56,7 @@ pub struct AxiRequestRange {
 /// A newly created AXI read request.
 pub struct InsertedAxiReadReq<'a> {
     pub index: usize,
+    pub burst_count: usize,
     pub read_edge: ReadEdgeNeeded<'a>,
 }
 
@@ -131,16 +132,14 @@ impl AxiBuilder {
         self.readreqs
             .push(AxiGenericIoOptionalNode { node: None, range });
 
+        let burst_count = range.burst_count();
         self.current_read = request.front();
         self.readreq_reads_remaining = request.count;
-
-        let burst_count = range.burst_count();
-        self.rctl_bursts.push_back(RctlBurst::new(burst_count));
-        self.rctl_depth += burst_count;
         self.pop_rctl_edge();
 
         InsertedAxiReadReq {
             index,
+            burst_count,
             read_edge: ReadEdgeNeeded { builder: self },
         }
     }
@@ -255,6 +254,11 @@ impl AxiBuilder {
         let mut rctl_edge = Some(burst.rctl_edge.unwrap());
         mem::swap(&mut rctl_edge, &mut self.rctl_edge);
         rctl_edge
+    }
+
+    pub fn add_burst(&mut self, burst_count: usize) {
+        self.rctl_bursts.push_back(RctlBurst::new(burst_count));
+        self.rctl_depth += burst_count;
     }
 }
 

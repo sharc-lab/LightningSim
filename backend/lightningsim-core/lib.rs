@@ -4,12 +4,12 @@ mod edge;
 mod fifo;
 mod node;
 
-use std::cmp;
+use std::{cmp, fmt, iter};
 
-use axi_interface::AxiInterfaceIo;
+use axi_interface::{AxiAddress, AxiInterfaceIo};
 use bitvec::bitvec;
 use builder::SimulationBuilder;
-use fifo::FifoIo;
+use fifo::{FifoId, FifoIo};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::FxHashMap;
 
@@ -56,8 +56,8 @@ pub(crate) struct CompiledModule {
 
 #[derive(Clone, FromPyObject)]
 pub struct SimulationParameters {
-    fifo_depths: FxHashMap<Fifo, Option<usize>>,
-    axi_delays: FxHashMap<AxiInterface, ClockCycle>,
+    fifo_depths: FxHashMap<FifoId, Option<usize>>,
+    axi_delays: FxHashMap<AxiAddress, ClockCycle>,
     ap_ctrl_chain_top_port_count: Option<u32>,
 }
 
@@ -192,6 +192,13 @@ impl CompiledSimulation {
             axi_io,
         })
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CompiledSimulation(graph={:?}, end_node={:?})",
+            self.graph, self.end_node
+        )
+    }
 }
 
 impl SimulationGraph {
@@ -206,20 +213,44 @@ impl SimulationGraph {
     }
 }
 
+impl fmt::Debug for SimulationGraph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(
+                self.node_offsets
+                    .iter()
+                    .copied()
+                    .zip(
+                        self.node_offsets[1..]
+                            .iter()
+                            .copied()
+                            .chain(iter::once(self.edges.len())),
+                    )
+                    .enumerate()
+                    .map(|(node, (start, end))| (node, &self.edges[start..end])),
+            )
+            .finish()
+    }
+}
+
 impl SimulationParameters {
     pub(crate) fn get_fifo_depth(&self, fifo: &Fifo) -> PyResult<Option<usize>> {
-        self.fifo_depths.get(fifo).copied().ok_or_else(|| {
+        self.fifo_depths.get(&fifo.id).copied().ok_or_else(|| {
             PyValueError::new_err(format!("no depth provided for FIFO with id {}", fifo.id))
         })
     }
 
     pub(crate) fn get_axi_delay(&self, interface: &AxiInterface) -> PyResult<ClockCycle> {
-        let delay = self.axi_delays.get(interface).copied().ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "no delay provided for AXI interface with address {:#010x}",
-                interface.address
-            ))
-        })?;
+        let delay = self
+            .axi_delays
+            .get(&interface.address)
+            .copied()
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "no delay provided for AXI interface with address {:#010x}",
+                    interface.address
+                ))
+            })?;
         Ok(cmp::max(delay, 1))
     }
 }
@@ -307,5 +338,6 @@ impl From<Option<u32>> for ApContinue {
 #[pymodule]
 fn _core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<SimulationBuilder>()?;
+    m.add_class::<CompiledSimulation>()?;
     Ok(())
 }

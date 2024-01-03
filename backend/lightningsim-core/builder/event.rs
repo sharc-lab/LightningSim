@@ -12,7 +12,7 @@ use super::{edge_builder::IncompleteEdgeKey, module_builder::ModuleKey};
 ///
 /// [UncommittedNode]: super::node::UncommittedNode
 /// [AxiInterfaceIoNodes::writereqs]: crate::graph::AxiInterfaceIoNodes::writereqs
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Event {
     SubcallStart {
         module_key: ModuleKey,
@@ -150,6 +150,15 @@ impl Event {
             Event::AxiWrite { .. } => false,
             // Induces an Edge::AxiWriteResp.
             Event::AxiWriteResponse { .. } => true,
+        }
+    }
+
+    /// Whether this event is stalled by other events occurring in the same
+    /// stage.
+    pub fn is_stalled(&self) -> bool {
+        match self {
+            Event::SubcallStart { .. } => false,
+            _ => true,
         }
     }
 }
