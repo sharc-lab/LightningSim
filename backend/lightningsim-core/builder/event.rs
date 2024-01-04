@@ -1,6 +1,8 @@
 use crate::{axi_interface::AxiInterface, fifo::Fifo};
 
-use super::{edge_builder::IncompleteEdgeKey, module_builder::ModuleKey};
+use super::{
+    axi_builder::FirstReadData, edge_builder::IncompleteEdgeKey, module_builder::ModuleKey,
+};
 
 /// Some event that impacts the global simulation state, as seen from the
 /// perspective of an [UncommittedNode].
@@ -68,13 +70,7 @@ pub enum Event {
     AxiRead {
         interface: AxiInterface,
         index: usize,
-
-        /// The key of the [AxiRead] edge within [EdgeBuilder::incomplete_edges]
-        /// whose destination should be this read.
-        ///
-        /// [AxiRead]: super::edge_builder::IncompleteEdgeType::AxiRead
-        /// [EdgeBuilder::incomplete_edges]: super::edge_builder::EdgeBuilder::incomplete_edges
-        read_edge: Option<IncompleteEdgeKey>,
+        first_read_data: Option<FirstReadData>,
 
         /// The key of the [AxiRctl] edge within [EdgeBuilder::incomplete_edges]
         /// whose source should be this read.
@@ -82,13 +78,6 @@ pub enum Event {
         /// [AxiRctl]: super::edge_builder::IncompleteEdgeType::AxiRctl
         /// [EdgeBuilder::incomplete_edges]: super::edge_builder::EdgeBuilder::incomplete_edges
         rctl_out_edge: Option<IncompleteEdgeKey>,
-
-        /// The key of the [AxiRctl] edge within [EdgeBuilder::incomplete_edges]
-        /// whose destination should be this read.
-        ///
-        /// [AxiRctl]: super::edge_builder::IncompleteEdgeType::AxiRctl
-        /// [EdgeBuilder::incomplete_edges]: super::edge_builder::EdgeBuilder::incomplete_edges
-        rctl_in_edge: Option<IncompleteEdgeKey>,
     },
     AxiWriteRequest {
         interface: AxiInterface,
@@ -142,10 +131,8 @@ impl Event {
             Event::AxiReadRequest { .. } => false,
             // Can induce an Edge::AxiRctl and/or an Edge::AxiRead.
             Event::AxiRead {
-                read_edge,
-                rctl_in_edge,
-                ..
-            } => read_edge.is_some() || rctl_in_edge.is_some(),
+                first_read_data, ..
+            } => first_read_data.is_some(),
             Event::AxiWriteRequest { .. } => false,
             Event::AxiWrite { .. } => false,
             // Induces an Edge::AxiWriteResp.

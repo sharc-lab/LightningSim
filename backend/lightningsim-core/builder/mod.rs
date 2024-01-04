@@ -31,6 +31,8 @@ use crate::{
     ClockCycle, CompiledSimulation, SimulationStage,
 };
 
+use self::axi_builder::FirstReadData;
+
 #[pyclass]
 #[derive(Clone)]
 pub struct SimulationBuilder {
@@ -279,19 +281,14 @@ impl SimulationComponentBuilders {
         request: AxiRequestRange,
     ) {
         let builder = self.axi.entry(interface).or_default();
-        let InsertedAxiReadReq {
-            index,
-            burst_count,
-            read_edge: read_edge_needed,
-        } = builder.insert_readreq(request);
         let read_edge = self
             .edges
             .insert_edge(IncompleteEdgeType::AxiRead(interface));
-        read_edge_needed.provide(read_edge);
-        while let Some(rctl_edge) = builder.pop_rctl_edge() {
-            self.edges.void_destination(rctl_edge);
-        }
-        builder.add_burst(burst_count);
+        let rctl_out_edge = self
+            .edges
+            .insert_edge(IncompleteEdgeType::AxiRctl(interface));
+        let InsertedAxiReadReq { index } =
+            builder.insert_readreq(request, read_edge, rctl_out_edge);
         self.add_event(
             frame,
             safe_offset,
@@ -334,17 +331,9 @@ impl SimulationComponentBuilders {
     ) {
         let InsertedAxiRead {
             index,
-            read_edge,
+            first_read_data,
             rctl_out_edge,
-            rctl_in_edge,
         } = self.axi.entry(interface).or_default().insert_read();
-        let rctl_out_edge = rctl_out_edge.map(|edge_needed| {
-            let new_edge = self
-                .edges
-                .insert_edge(IncompleteEdgeType::AxiRctl(interface));
-            edge_needed.provide(new_edge);
-            new_edge
-        });
         self.add_event(
             frame,
             safe_offset,
@@ -352,9 +341,8 @@ impl SimulationComponentBuilders {
             Event::AxiRead {
                 interface,
                 index,
-                read_edge,
+                first_read_data,
                 rctl_out_edge,
-                rctl_in_edge,
             },
         );
     }
@@ -527,22 +515,31 @@ impl SimulationComponentBuilders {
             Event::AxiRead {
                 interface,
                 index,
-                read_edge,
+                first_read_data,
                 rctl_out_edge,
-                rctl_in_edge,
             } => {
-                self.axi
-                    .get_mut(&interface)
-                    .unwrap()
-                    .update_read(index, node);
-                if let Some(read_edge) = read_edge {
-                    self.edges.push_destination(read_edge);
-                }
+                let axi_builder = self.axi.get_mut(&interface).unwrap();
+                axi_builder.update_read(index, node);
                 if let Some(rctl_out_edge) = rctl_out_edge {
                     self.edges.update_source(rctl_out_edge, node);
                 }
-                if let Some(rctl_in_edge) = rctl_in_edge {
-                    self.edges.push_destination(rctl_in_edge);
+                if let Some(FirstReadData {
+                    read_edge,
+                    readreq_burst,
+                }) = first_read_data
+                {
+                    self.edges.push_destination(read_edge);
+                    let mut rctl_in_edge = None;
+                    while let Some(edge) = axi_builder.pop_rctl_edge() {
+                        let prev_rctl_in_edge = rctl_in_edge.replace(edge);
+                        if let Some(edge) = prev_rctl_in_edge {
+                            self.edges.void_destination(edge);
+                        }
+                    }
+                    if let Some(edge) = rctl_in_edge {
+                        self.edges.push_destination(edge);
+                    }
+                    axi_builder.add_burst(readreq_burst);
                 }
             }
             Event::AxiWriteRequest { interface, index } => {

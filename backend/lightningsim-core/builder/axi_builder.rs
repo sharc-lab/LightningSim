@@ -28,16 +28,22 @@ pub struct AxiBuilder {
     /// The builder for [AxiInterfaceIoNodes::writeresps].
     writeresps: Vec<Option<NodeWithDelay>>,
 
-    read_edge: Option<IncompleteEdgeKey>,
-    rctl_edge: Option<IncompleteEdgeKey>,
+    first_read_data: Option<BuilderFirstReadData>,
     writeresp_edge: IncompleteEdgeKey,
 
     current_read: AxiAddressRange,
     readreq_reads_remaining: u32,
+    readreq_rctl_out_edge: IncompleteEdgeKey,
     current_write: AxiAddressRange,
     writereq_writes_remaining: u32,
     rctl_depth: usize,
     rctl_bursts: VecDeque<RctlBurst>,
+}
+
+#[derive(Clone)]
+struct BuilderFirstReadData {
+    read_edge: IncompleteEdgeKey,
+    burst_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -54,18 +60,21 @@ pub struct AxiRequestRange {
 }
 
 /// A newly created AXI read request.
-pub struct InsertedAxiReadReq<'a> {
+pub struct InsertedAxiReadReq {
     pub index: usize,
-    pub burst_count: usize,
-    pub read_edge: ReadEdgeNeeded<'a>,
 }
 
 /// A newly created AXI read.
-pub struct InsertedAxiRead<'a> {
+pub struct InsertedAxiRead {
     pub index: usize,
-    pub read_edge: Option<IncompleteEdgeKey>,
-    pub rctl_out_edge: Option<RctlEdgeNeeded<'a>>,
-    pub rctl_in_edge: Option<IncompleteEdgeKey>,
+    pub first_read_data: Option<FirstReadData>,
+    pub rctl_out_edge: Option<IncompleteEdgeKey>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FirstReadData {
+    pub read_edge: IncompleteEdgeKey,
+    pub readreq_burst: RctlBurst,
 }
 
 /// A newly created AXI write request.
@@ -86,18 +95,14 @@ pub struct InsertedAxiWriteResp {
 }
 
 #[must_use]
-pub struct ReadEdgeNeeded<'a> {
-    builder: &'a mut AxiBuilder,
-}
-
-#[must_use]
-pub struct RctlEdgeNeeded<'a> {
-    builder: &'a mut AxiBuilder,
-}
-
-#[must_use]
 pub struct WriteRespEdgeNeeded<'a> {
     builder: &'a mut AxiBuilder,
+}
+
+#[derive(Clone, Debug)]
+pub struct RctlBurst {
+    pub burst_count: usize,
+    pub rctl_edge: IncompleteEdgeKey,
 }
 
 impl AxiBuilder {
@@ -108,14 +113,14 @@ impl AxiBuilder {
             writereqs: Vec::new(),
             writes: Vec::new(),
             writeresps: Vec::new(),
-            read_edge: None,
-            rctl_edge: None,
+            first_read_data: None,
             writeresp_edge: 0,
             current_read: AxiAddressRange {
                 offset: 0,
                 length: 0,
             },
             readreq_reads_remaining: 0,
+            readreq_rctl_out_edge: 0,
             current_write: AxiAddressRange {
                 offset: 0,
                 length: 0,
@@ -126,22 +131,26 @@ impl AxiBuilder {
         }
     }
 
-    pub fn insert_readreq(&mut self, request: AxiRequestRange) -> InsertedAxiReadReq {
+    pub fn insert_readreq(
+        &mut self,
+        request: AxiRequestRange,
+        read_edge: IncompleteEdgeKey,
+        rctl_out_edge: IncompleteEdgeKey,
+    ) -> InsertedAxiReadReq {
         let range = request.range();
         let index = self.readreqs.len();
         self.readreqs
             .push(AxiGenericIoOptionalNode { node: None, range });
 
-        let burst_count = range.burst_count();
         self.current_read = request.front();
+        self.first_read_data = Some(BuilderFirstReadData {
+            read_edge,
+            burst_count: range.burst_count(),
+        });
+        self.readreq_rctl_out_edge = rctl_out_edge;
         self.readreq_reads_remaining = request.count;
-        self.pop_rctl_edge();
 
-        InsertedAxiReadReq {
-            index,
-            burst_count,
-            read_edge: ReadEdgeNeeded { builder: self },
-        }
+        InsertedAxiReadReq { index }
     }
 
     pub fn insert_writereq(&mut self, request: AxiRequestRange) -> InsertedAxiWriteReq {
@@ -166,19 +175,27 @@ impl AxiBuilder {
 
         self.readreq_reads_remaining -= 1;
         let is_last_of_readreq = self.readreq_reads_remaining == 0;
-        let read_edge = self.read_edge.take();
-        let rctl_in_edge = self.rctl_edge.take();
-        let rctl_out_edge = if is_last_of_readreq {
-            Some(RctlEdgeNeeded { builder: self })
-        } else {
-            None
+        let first_read_data = self.first_read_data.take().map(
+            |BuilderFirstReadData {
+                 read_edge,
+                 burst_count,
+             }| FirstReadData {
+                read_edge,
+                readreq_burst: RctlBurst {
+                    burst_count,
+                    rctl_edge: self.readreq_rctl_out_edge,
+                },
+            },
+        );
+        let rctl_out_edge = match is_last_of_readreq {
+            true => Some(self.readreq_rctl_out_edge),
+            false => None,
         };
 
         InsertedAxiRead {
             index,
-            read_edge,
+            first_read_data,
             rctl_out_edge,
-            rctl_in_edge,
         }
     }
 
@@ -242,7 +259,7 @@ impl AxiBuilder {
     pub fn finish(&mut self) -> impl Iterator<Item = IncompleteEdgeKey> {
         mem::take(&mut self.rctl_bursts)
             .into_iter()
-            .filter_map(|burst| burst.rctl_edge)
+            .map(|burst| burst.rctl_edge)
     }
 
     pub fn pop_rctl_edge(&mut self) -> Option<IncompleteEdgeKey> {
@@ -251,14 +268,12 @@ impl AxiBuilder {
         }
         let burst = self.rctl_bursts.pop_front().unwrap();
         self.rctl_depth -= burst.burst_count;
-        let mut rctl_edge = Some(burst.rctl_edge.unwrap());
-        mem::swap(&mut rctl_edge, &mut self.rctl_edge);
-        rctl_edge
+        Some(burst.rctl_edge)
     }
 
-    pub fn add_burst(&mut self, burst_count: usize) {
-        self.rctl_bursts.push_back(RctlBurst::new(burst_count));
-        self.rctl_depth += burst_count;
+    pub fn add_burst(&mut self, burst: RctlBurst) {
+        self.rctl_depth += burst.burst_count;
+        self.rctl_bursts.push_back(burst);
     }
 }
 
@@ -290,9 +305,8 @@ impl TryFrom<AxiBuilder> for AxiInterfaceIoNodes {
             .map(|write| write.into())
             .collect();
         let writeresps: Option<Box<[NodeWithDelay]>> = builder.writeresps.into_iter().collect();
-        let initialized_all_edges = builder.read_edge.is_none()
-            && builder.rctl_edge.is_none()
-            && builder.rctl_bursts.is_empty();
+        let initialized_all_edges =
+            builder.first_read_data.is_none() && builder.rctl_bursts.is_empty();
         match (
             readreqs,
             reads,
@@ -352,35 +366,8 @@ impl From<&AxiRequestRange> for AxiAddressRange {
     }
 }
 
-impl<'a> ReadEdgeNeeded<'a> {
-    pub fn provide(self, edge: IncompleteEdgeKey) {
-        self.builder.read_edge = Some(edge);
-    }
-}
-
-impl<'a> RctlEdgeNeeded<'a> {
-    pub fn provide(self, edge: IncompleteEdgeKey) {
-        self.builder.rctl_bursts.back_mut().unwrap().rctl_edge = Some(edge);
-    }
-}
-
 impl<'a> WriteRespEdgeNeeded<'a> {
     pub fn provide(self, edge: IncompleteEdgeKey) {
         self.builder.writeresp_edge = edge;
-    }
-}
-
-#[derive(Clone)]
-struct RctlBurst {
-    burst_count: usize,
-    rctl_edge: Option<IncompleteEdgeKey>,
-}
-
-impl RctlBurst {
-    fn new(burst_count: usize) -> Self {
-        Self {
-            burst_count,
-            rctl_edge: None,
-        }
     }
 }
