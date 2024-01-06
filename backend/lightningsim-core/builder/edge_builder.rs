@@ -19,7 +19,7 @@ pub struct EdgeBuilder {
     incomplete_edges: Slab<IncompleteEdge>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IncompleteEdgeType {
     ControlFlow,
     FifoRaw(Fifo),
@@ -47,55 +47,148 @@ impl EdgeBuilder {
         self.edges.push(Some(edge));
     }
 
+    pub fn add_delay(&mut self, key: IncompleteEdgeKey, delay: ClockCycle) {
+        self.incomplete_edges[key].delay += delay;
+    }
+
     pub fn update_source(&mut self, key: IncompleteEdgeKey, source: NodeWithDelay) {
         use IncompleteEdgeEndpoints::*;
-        let incomplete_edge = &mut self.incomplete_edges[key];
-        incomplete_edge.delay += source.delay;
-        let destination = match incomplete_edge.endpoints {
-            EndpointsUnknown => None,
-            DestinationKnown(destination) => Some(destination),
-            SourceKnown(_) => panic!("source already exists"),
-        };
-        match destination {
-            None => incomplete_edge.endpoints = SourceKnown(source.node),
-            Some(destination) => {
+        let IncompleteEdge {
+            endpoints, delay, ..
+        } = &mut self.incomplete_edges[key];
+        *delay += source.delay;
+        match endpoints {
+            EndpointsUnknown | SourceRedirected(..) => *endpoints = SourceKnown(Some(source.node)),
+            &mut DestinationKnown(destination) => {
                 let incomplete_edge = self.incomplete_edges.remove(key);
                 if let Some(edge_index) = destination {
                     self.edges[edge_index] = Some(incomplete_edge.into_edge(source.node));
                 }
             }
+            &mut DestinationRedirected(redirected_key) => {
+                let delay = *delay;
+                self.incomplete_edges.remove(key);
+                return self.update_source(
+                    redirected_key,
+                    NodeWithDelay {
+                        node: source.node,
+                        delay,
+                    },
+                );
+            }
+            SourceKnown(..) => panic!("source already exists"),
         }
-    }
-
-    pub fn add_delay(&mut self, key: IncompleteEdgeKey, delay: ClockCycle) {
-        self.incomplete_edges[key].delay += delay;
     }
 
     pub fn push_destination(&mut self, key: IncompleteEdgeKey) {
         use IncompleteEdgeEndpoints::*;
-        let incomplete_edge = &mut self.incomplete_edges[key];
-        let source = match incomplete_edge.endpoints {
-            EndpointsUnknown => None,
-            SourceKnown(source) => Some(source),
-            DestinationKnown(..) => panic!("destination already exists"),
-        };
-        let edge = match source {
-            None => {
-                incomplete_edge.endpoints = DestinationKnown(Some(self.edges.len()));
+        let IncompleteEdge {
+            endpoints, delay, ..
+        } = &mut self.incomplete_edges[key];
+        let edge = match endpoints {
+            EndpointsUnknown | DestinationRedirected(..) => {
+                *endpoints = DestinationKnown(Some(self.edges.len()));
                 None
             }
-            Some(source) => Some(self.incomplete_edges.remove(key).into_edge(source)),
+            &mut SourceKnown(source) => {
+                let incomplete_edge = self.incomplete_edges.remove(key);
+                match source {
+                    Some(source) => Some(incomplete_edge.into_edge(source)),
+                    None => return,
+                }
+            }
+            &mut SourceRedirected(redirected_key) => {
+                let delay = *delay;
+                self.incomplete_edges.remove(key);
+                self.add_delay(redirected_key, delay);
+                return self.push_destination(redirected_key);
+            }
+            DestinationKnown(..) => panic!("destination already exists"),
         };
         self.edges.push(edge);
     }
 
+    pub fn void_source(&mut self, key: IncompleteEdgeKey) {
+        use IncompleteEdgeEndpoints::*;
+        let endpoints = &mut self.incomplete_edges[key].endpoints;
+        match endpoints {
+            EndpointsUnknown | SourceRedirected(..) => *endpoints = SourceKnown(None),
+            DestinationKnown(..) => drop(self.incomplete_edges.remove(key)),
+            &mut DestinationRedirected(redirected_key) => {
+                self.incomplete_edges.remove(key);
+                return self.void_source(redirected_key);
+            }
+            SourceKnown(..) => panic!("source already exists"),
+        }
+    }
+
     pub fn void_destination(&mut self, key: IncompleteEdgeKey) {
         use IncompleteEdgeEndpoints::*;
-        let incomplete_edge = &mut self.incomplete_edges[key];
-        match incomplete_edge.endpoints {
-            EndpointsUnknown => incomplete_edge.endpoints = DestinationKnown(None),
+        let endpoints = &mut self.incomplete_edges[key].endpoints;
+        match endpoints {
+            EndpointsUnknown | DestinationRedirected(..) => *endpoints = DestinationKnown(None),
             SourceKnown(..) => drop(self.incomplete_edges.remove(key)),
+            &mut SourceRedirected(redirected_key) => {
+                self.incomplete_edges.remove(key);
+                return self.void_destination(redirected_key);
+            }
             DestinationKnown(..) => panic!("destination already exists"),
+        }
+    }
+
+    pub fn join(&mut self, source_edge: IncompleteEdgeKey, destination_edge: IncompleteEdgeKey) {
+        use IncompleteEdgeEndpoints::*;
+        let (
+            IncompleteEdge {
+                r#type: source_type,
+                delay: source_delay,
+                endpoints: source_endpoints,
+            },
+            IncompleteEdge {
+                r#type: destination_type,
+                delay: destination_delay,
+                endpoints: destination_endpoints,
+            },
+        ) = self
+            .incomplete_edges
+            .get2_mut(source_edge, destination_edge)
+            .expect("join on nonexistent edge");
+        assert_eq!(
+            source_type, destination_type,
+            "cannot join edges of different types"
+        );
+        match (&source_endpoints, &destination_endpoints) {
+            (SourceRedirected(..), _) | (_, DestinationRedirected(..)) => {
+                panic!("cannot join an edge already joined to another edge");
+            }
+            (DestinationKnown(..) | DestinationRedirected(..), _) => {
+                panic!("destination already exists on source edge");
+            }
+            (_, SourceKnown(..) | SourceRedirected(..)) => {
+                panic!("source already exists on destination edge");
+            }
+            (EndpointsUnknown, EndpointsUnknown) => {
+                *source_endpoints = DestinationRedirected(destination_edge);
+                *destination_endpoints = SourceRedirected(source_edge);
+            }
+            (&&mut SourceKnown(source_node), EndpointsUnknown) => {
+                *destination_endpoints = SourceKnown(source_node);
+                *destination_delay += *source_delay;
+                self.incomplete_edges.remove(source_edge);
+            }
+            (EndpointsUnknown, &&mut DestinationKnown(edge_index)) => {
+                *source_endpoints = DestinationKnown(edge_index);
+                *source_delay += *destination_delay;
+                self.incomplete_edges.remove(destination_edge);
+            }
+            (&&mut SourceKnown(source_node), &&mut DestinationKnown(edge_index)) => {
+                *destination_delay += *source_delay;
+                self.incomplete_edges.remove(source_edge);
+                let incomplete_edge = self.incomplete_edges.remove(destination_edge);
+                if let (Some(source_node), Some(edge_index)) = (source_node, edge_index) {
+                    self.edges[edge_index] = Some(incomplete_edge.into_edge(source_node));
+                }
+            }
         }
     }
 }
@@ -104,15 +197,29 @@ impl TryFrom<EdgeBuilder> for SimulationGraph {
     type Error = PyErr;
 
     fn try_from(value: EdgeBuilder) -> Result<Self, Self::Error> {
-        let node_offsets = value.node_offsets.into_boxed_slice();
-        let edges: Option<Box<[Edge]>> = value.edges.into_iter().collect();
-        let all_edges_completed = value.incomplete_edges.is_empty();
-        match (edges, all_edges_completed) {
-            (Some(edges), true) => Ok(SimulationGraph {
+        let edge_iter_1 = value.edges.into_iter();
+        let edge_iter_2 = edge_iter_1.clone();
+        let edges: Box<[Edge]> = edge_iter_1.filter_map(|edge| edge).collect();
+        let voided_count: Box<[usize]> = edge_iter_2
+            .scan(0, |voided_count, edge| {
+                let current_voided_count = *voided_count;
+                if edge.is_none() {
+                    *voided_count += 1;
+                }
+                Some(current_voided_count)
+            })
+            .collect();
+        let node_offsets = value
+            .node_offsets
+            .into_iter()
+            .map(|offset| offset - voided_count[offset])
+            .collect();
+        match value.incomplete_edges.is_empty() {
+            true => Ok(SimulationGraph {
                 node_offsets,
                 edges,
             }),
-            _ => Err(PyValueError::new_err("incomplete edges remain")),
+            false => Err(PyValueError::new_err("incomplete edges remain")),
         }
     }
 }
@@ -154,8 +261,10 @@ impl IncompleteEdge {
 #[derive(Clone)]
 enum IncompleteEdgeEndpoints {
     EndpointsUnknown,
-    SourceKnown(NodeIndex),
+    SourceKnown(Option<NodeIndex>),
+    SourceRedirected(IncompleteEdgeKey),
     DestinationKnown(Option<EdgeIndex>),
+    DestinationRedirected(IncompleteEdgeKey),
 }
 
 impl Default for IncompleteEdgeEndpoints {
