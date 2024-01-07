@@ -19,9 +19,10 @@ from time import time
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
+from lightningsim._core import SimulatedModule
 from lightningsim.model import Function, Solution
 from lightningsim.runner import Runner, RunnerStep
-from lightningsim.simulator import Simulator, simulate
+from lightningsim.simulator import simulate
 
 SCRIPT_DIR = Path(__file__).parent
 
@@ -104,16 +105,15 @@ async def run_benchmark(benchmark: Path):
             log("Starting LightningSim simulation (parallel with HLS)...")
             parallel_start_time = time()
             trace = await runner.run()
-            simulation = await simulate(trace)
+            simulation = simulate(trace)
             parallel_end_time = time()
-            trace_gen_duration = (
-                runner.steps[RunnerStep.RUNNING_TESTBENCH].end_time
-                - parallel_start_time
-            )
-            trace_analysis_duration = (
-                parallel_end_time - runner.steps[RunnerStep.RESOLVING_TRACE].start_time
-            )
-            lightningsim_cycles = simulation.simulator.cycle
+            trace_gen_end_time = runner.steps[RunnerStep.RUNNING_TESTBENCH].end_time
+            assert trace_gen_end_time is not None
+            trace_gen_duration = trace_gen_end_time - parallel_start_time
+            trace_analysis_start_time = runner.steps[RunnerStep.RESOLVING_TRACE].start_time
+            assert trace_analysis_start_time is not None
+            trace_analysis_duration = parallel_end_time - trace_analysis_start_time
+            lightningsim_cycles = simulation.top_module.end
             csv_writer.writerow(("Cycles", "LS", lightningsim_cycles))
             csv_writer.writerow(
                 (
@@ -134,28 +134,28 @@ async def run_benchmark(benchmark: Path):
             with open(details_path, "w") as details_fp:
                 max_digits = len(f"{lightningsim_cycles}")
 
-                def write_details(simulator: Simulator, indent=""):
+                def write_details(simulator: SimulatedModule, indent=""):
                     details_fp.write(
                         f"{indent}"
-                        f"[{simulator.start_cycle:{max_digits}d}-"
-                        f"{simulator.cycle:{max_digits}d}] "
-                        f"{simulator.function.name}\n"
+                        f"[{simulator.start:{max_digits}d}-"
+                        f"{simulator.end:{max_digits}d}] "
+                        f"{simulator.name}\n"
                     )
-                    for subcall in simulator.subcalls.values():
-                        write_details(subcall, indent=indent + "\t")
+                    for submodule in simulator.submodules:
+                        write_details(submodule, indent=indent + "\t")
 
-                write_details(simulation.simulator)
+                write_details(simulation.top_module)
 
             log(f"Cycle counts for all functions written to {relpath(details_path)}")
             del simulation
 
             log("Starting LightningSim incremental simulation...")
             ls_inc_start_time = time()
-            trace.channel_depths = {
-                channel: prev_depth
-                for channel, prev_depth in trace.channel_depths.items()
+            trace.params.fifo_depths = {
+                fifo_id: prev_depth
+                for fifo_id, prev_depth in trace.params.fifo_depths.items()
             }
-            await simulate(trace)
+            simulate(trace)
             ls_inc_end_time = time()
             ls_inc_duration = ls_inc_end_time - ls_inc_start_time
             csv_writer.writerow(("Time", "LS Inc.", ls_inc_duration))
@@ -169,7 +169,7 @@ async def run_benchmark(benchmark: Path):
             runner = Runner(solution)
             ls_full_start_time = time()
             trace = await runner.run()
-            await simulate(trace)
+            simulate(trace)
             ls_full_end_time = time()
             ls_full_duration = ls_full_end_time - ls_full_start_time
             csv_writer.writerow(("Time", "LS", ls_full_duration))

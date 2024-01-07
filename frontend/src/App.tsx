@@ -289,7 +289,7 @@ const App: Component = () => {
           </span>
           <Show
             when={currentStatus.RUNNING_SIMULATION_ACTUAL.error!.includes(
-              "DeadlockError:"
+              "deadlock detected"
             )}
             fallback={<>Error calculating stalls</>}
           >

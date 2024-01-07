@@ -6,7 +6,7 @@ mod node;
 
 use std::{cmp, fmt, iter};
 
-use axi_interface::{AxiAddress, AxiInterfaceIo};
+use axi_interface::{AxiAddress, AxiAddressRange, AxiGenericIo, AxiInterfaceIo};
 use bitvec::bitvec;
 use builder::SimulationBuilder;
 use fifo::{FifoId, FifoIo};
@@ -376,5 +376,13 @@ impl From<Option<u32>> for ApContinue {
 fn _core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<SimulationBuilder>()?;
     m.add_class::<CompiledSimulation>()?;
+    m.add_class::<Simulation>()?;
+    m.add_class::<SimulatedModule>()?;
+    m.add_class::<Fifo>()?;
+    m.add_class::<FifoIo>()?;
+    m.add_class::<AxiInterface>()?;
+    m.add_class::<AxiInterfaceIo>()?;
+    m.add_class::<AxiGenericIo>()?;
+    m.add_class::<AxiAddressRange>()?;
     Ok(())
 }

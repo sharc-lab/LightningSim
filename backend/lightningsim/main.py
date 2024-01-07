@@ -11,10 +11,11 @@ from pathlib import Path
 from time import time
 from traceback import format_exception
 from typing import Dict, Iterable, Set
+from ._core import SimulatedModule
 from .model import Solution
 from .runner import CompletedProcess, Runner, RunnerStep, Step
-from .simulator import Simulation, Simulator, simulate
-from .trace_file import ResolvedTrace, Stream
+from .simulator import Simulation, simulate
+from .trace_file import ResolvedTrace, SimulationParameters, Stream
 
 
 class GlobalStep(Enum):
@@ -115,15 +116,19 @@ class Server:
         if self.trace is None:
             return None
         fifos = {}
-        for fifo, depth in self.trace.channel_depths.items():
+        for fifo_id, fifo in self.trace.fifos.items():
             fifo_data = {
-                "depth": depth,
-                "observed": self.simulation_actual.observed_fifo_depths[fifo]
-                if self.simulation_actual is not None
-                else None,
-                "optimal": self.simulation_optimal.observed_fifo_depths[fifo]
-                if self.simulation_optimal is not None
-                else None,
+                "depth": self.trace.params.fifo_depths[fifo_id],
+                "observed": (
+                    self.simulation_actual.observed_fifo_depths[fifo]
+                    if self.simulation_actual is not None
+                    else None
+                ),
+                "optimal": (
+                    self.simulation_optimal.observed_fifo_depths[fifo]
+                    if self.simulation_optimal is not None
+                    else None
+                ),
             }
             existing_data = fifos.setdefault(self.get_fifo_ui_name(fifo), fifo_data)
             if fifo_data["depth"] > existing_data["depth"]:
@@ -142,13 +147,22 @@ class Server:
 
     def get_latencies(self):
         def build_latency_object(
-            simulator_actual: Simulator | None, simulator_optimal: Simulator | None
+            simulator_actual: SimulatedModule | None,
+            simulator_optimal: SimulatedModule | None,
         ):
-            name = (simulator_actual or simulator_optimal).function.name
-            start = (simulator_actual or simulator_optimal).start_cycle
-            actual = simulator_actual.length if simulator_actual is not None else None
+            simulator_finished = simulator_actual or simulator_optimal
+            assert simulator_finished is not None
+            name = simulator_finished.name
+            start = simulator_finished.start
+            actual = (
+                (simulator_actual.end - simulator_actual.start)
+                if simulator_actual is not None
+                else None
+            )
             optimal = (
-                simulator_optimal.length if simulator_optimal is not None else None
+                (simulator_optimal.end - simulator_optimal.start)
+                if simulator_optimal is not None
+                else None
             )
             return {
                 "name": name,
@@ -158,12 +172,16 @@ class Server:
                 "children": [
                     build_latency_object(subcall_actual, subcall_optimal)
                     for subcall_actual, subcall_optimal in zip_longest(
-                        simulator_actual.subcalls.values()
-                        if simulator_actual is not None
-                        else (),
-                        simulator_optimal.subcalls.values()
-                        if simulator_optimal is not None
-                        else (),
+                        (
+                            simulator_actual.submodules
+                            if simulator_actual is not None
+                            else ()
+                        ),
+                        (
+                            simulator_optimal.submodules
+                            if simulator_optimal is not None
+                            else ()
+                        ),
                     )
                 ],
             }
@@ -171,10 +189,10 @@ class Server:
         if self.simulation_actual is None and self.simulation_optimal is None:
             return None
         return build_latency_object(
-            self.simulation_actual.simulator
+            self.simulation_actual.top_module
             if self.simulation_actual is not None
             else None,
-            self.simulation_optimal.simulator
+            self.simulation_optimal.top_module
             if self.simulation_optimal is not None
             else None,
         )
@@ -278,10 +296,8 @@ class Server:
 
         self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL].reset()
         try:
-            with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL] as step:
-                self.simulation_actual = await simulate(
-                    self.trace, progress_callback=step.set_progress
-                )
+            with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL]:
+                self.simulation_actual = simulate(self.trace)
         except Exception:
             self.simulation_actual = None
             return False
@@ -296,17 +312,20 @@ class Server:
 
         self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL].reset()
         trace = ResolvedTrace(
-            trace=self.trace.trace,
-            channel_depths={channel: None for channel in self.trace.channel_depths},
-            axi_latencies=self.trace.axi_latencies,
-            is_ap_ctrl_chain=self.trace.is_ap_ctrl_chain,
-            num_stall_events=self.trace.num_stall_events,
+            compiled=self.trace.compiled,
+            params=SimulationParameters(
+                fifo_depths={
+                    fifo_id: None for fifo_id in self.trace.params.fifo_depths.keys()
+                },
+                axi_delays=self.trace.params.axi_delays,
+                ap_ctrl_chain_top_port_count=self.trace.params.ap_ctrl_chain_top_port_count,
+            ),
+            fifos=self.trace.fifos,
+            axi_interfaces=self.trace.axi_interfaces,
         )
         try:
             with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL] as step:
-                self.simulation_optimal = await simulate(
-                    trace, progress_callback=step.set_progress
-                )
+                self.simulation_optimal = simulate(trace)
         except Exception:
             self.simulation_optimal = None
             return False
@@ -328,12 +347,14 @@ class Server:
             self.generate_trace_task.cancel()
         self.generate_trace_task = create_task(self.generate_trace())
 
-    def on_change_fifos(self, sid, fifos):
+    def on_change_fifos(self, sid, fifos: dict[str, int]):
         if self.trace is None:
             return
-        self.trace.channel_depths = {
-            channel: fifos.get(self.get_fifo_ui_name(channel), prev_depth)
-            for channel, prev_depth in self.trace.channel_depths.items()
+        self.trace.params.fifo_depths = {
+            fifo_id: fifos.get(
+                self.get_fifo_ui_name(fifo), self.trace.params.fifo_depths[fifo_id]
+            )
+            for fifo_id, fifo in self.trace.fifos.items()
         }
         if self.simulate_actual_task is not None:
             self.simulate_actual_task.cancel()

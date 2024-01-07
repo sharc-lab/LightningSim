@@ -278,10 +278,9 @@ class UnresolvedLoop:
 @dataclass(slots=True)
 class ResolvedTrace:
     compiled: CompiledSimulation
-    default_params: "SimulationParameters"
-    fifos: List[Stream]
-    axi_interfaces: List[AXIInterface]
-    num_stall_events: int
+    params: "SimulationParameters"
+    fifos: Dict[int, Stream]
+    axi_interfaces: Dict[int, AXIInterface]
 
 
 @dataclass(slots=True)
@@ -314,11 +313,10 @@ async def resolve_trace(
     stack: List[StackFrame] = [top_frame]
     trace_iter = iter(enumerate(trace))
     i: int = 0
-    num_stall_events: int = 0
     ap_ctrl_chain_top_port_count: int | None = None
 
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
-        nonlocal i, num_stall_events, ap_ctrl_chain_top_port_count
+        nonlocal i, ap_ctrl_chain_top_port_count
         start_time = time()
         for i, entry in trace_iter:
             frame = stack[-1]
@@ -431,7 +429,6 @@ async def resolve_trace(
                         raise ValueError(f"unexpected {entry.type} during trace resolution")
 
                 current_resolved_block.num_events += 1
-                num_stall_events += 1
                 if current_resolved_block.num_events >= len(events):
                     frame = stack[-1]
                     if current_loop is not None:
@@ -627,7 +624,7 @@ async def resolve_trace(
 
     return ResolvedTrace(
         compiled=builder.finish(),
-        default_params=SimulationParameters(
+        params=SimulationParameters(
             fifo_depths={
                 stream.id: depth for stream, depth in trace.channel_depths.items()
             },
@@ -637,7 +634,8 @@ async def resolve_trace(
             },
             ap_ctrl_chain_top_port_count=ap_ctrl_chain_top_port_count,
         ),
-        fifos=list(trace.channel_depths.keys()),
-        axi_interfaces=list(trace.axi_latencies.keys()),
-        num_stall_events=num_stall_events,
+        fifos={fifo.id: fifo for fifo in trace.channel_depths.keys()},
+        axi_interfaces={
+            interface.address: interface for interface in trace.axi_latencies.keys()
+        },
     )

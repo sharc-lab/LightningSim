@@ -1,4 +1,3 @@
-from typing import Any
 from .trace_file import AXIRequestMetadata, SimulationParameters
 
 class SimulationBuilder:
@@ -36,4 +35,44 @@ class SimulationBuilder:
     def finish(self) -> CompiledSimulation: ...
 
 class CompiledSimulation:
-    def execute(self, parameters: SimulationParameters) -> Any: ...
+    def execute(self, parameters: SimulationParameters) -> Simulation: ...
+    def node_count(self) -> int: ...
+    def edge_count(self) -> int: ...
+
+class Simulation:
+    top_module: SimulatedModule
+    fifo_io: dict[Fifo, FifoIo]
+    axi_io: dict[AxiInterface, AxiInterfaceIo]
+
+class SimulatedModule:
+    name: str
+    start: int
+    end: int
+    submodules: list[SimulatedModule]
+
+class Fifo:
+    id: int
+
+class FifoIo:
+    writes: list[int]
+    reads: list[int]
+
+    def get_observed_depth(self) -> int: ...
+
+class AxiInterface:
+    address: int
+
+class AxiInterfaceIo:
+    readreqs: list[AxiGenericIo]
+    reads: list[AxiGenericIo]
+    writereqs: list[AxiGenericIo]
+    writes: list[AxiGenericIo]
+    writeresps: list[int]
+
+class AxiGenericIo:
+    time: int
+    range: AxiAddressRange
+
+class AxiAddressRange:
+    offset: int
+    length: int

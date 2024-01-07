@@ -100,3 +100,30 @@ impl FifoIo {
         }
     }
 }
+
+#[pymethods]
+impl FifoIo {
+    fn get_observed_depth(&self) -> usize {
+        let mut depth: usize = 0;
+        let mut max_depth: usize = 0;
+        let mut write_iter = self.writes.iter();
+        let mut read_iter = self.reads.iter();
+        let mut next_write_cycle = write_iter.next();
+        let mut next_read_cycle = read_iter.next();
+
+        while let Some(write_cycle) = next_write_cycle {
+            let read_cycle =
+                next_read_cycle.expect("last read should never happen before last write");
+            if write_cycle < read_cycle {
+                depth += 1;
+                max_depth = max_depth.max(depth);
+                next_write_cycle = write_iter.next();
+            } else {
+                depth -= 1;
+                next_read_cycle = read_iter.next();
+            }
+        }
+
+        max_depth
+    }
+}

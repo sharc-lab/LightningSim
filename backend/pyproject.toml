@@ -14,3 +14,4 @@ namespaces = false
 
 [[tool.setuptools-rust.ext-modules]]
 target = "lightningsim._core"
+debug = false
