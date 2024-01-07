@@ -4,7 +4,7 @@ use crate::axi_interface::{RctlDepth, MAX_RCTL_DEPTH};
 
 use super::edge_builder::{EdgeBuilder, IncompleteEdgeKey};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct AxiRctl {
     state: AxiRctlState,
     depth: RctlDepth,
@@ -17,7 +17,7 @@ pub struct RctlTransaction {
     pub out_edge: IncompleteEdgeKey,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum AxiRctlState {
     WithinCapacity(VecDeque<RctlTransaction>),
     Overflowed {
@@ -26,7 +26,7 @@ enum AxiRctlState {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RctlHeadTransaction {
     burst_count: RctlDepth,
     in_edge: IncompleteEdgeKey,
@@ -82,6 +82,7 @@ impl AxiRctl {
                 }
             }
             Overflowed { head, tail } => {
+                let overlap_len = head.len();
                 for transaction in head.into_iter() {
                     self.push(
                         edge_builder,
@@ -92,16 +93,22 @@ impl AxiRctl {
                         },
                     );
                 }
-                let head = match &mut self.state {
-                    Overflowed { head, .. } => mem::take(head),
+                let (head, overlap) = match &mut self.state {
+                    Overflowed { head, tail } => (head, tail),
                     WithinCapacity(_) => panic!(
                         "AxiRctl::extend was called with overflowed AxiRctl but did not overflow"
                     ),
                 };
+                let head = mem::take(head);
+                if let Some(dangling) = overlap.len().checked_sub(overlap_len) {
+                    for transaction in overlap.drain(..dangling) {
+                        edge_builder.void_destination(transaction.out_edge);
+                    }
+                }
                 *self = Self {
                     state: Overflowed { head, tail },
                     depth: other.depth,
-                }
+                };
             }
         }
     }
