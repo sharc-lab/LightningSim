@@ -208,7 +208,7 @@ impl SimulationGraph {
             .node_offsets
             .get(node + 1)
             .copied()
-            .unwrap_or_else(|| self.edges.len());
+            .unwrap_or(self.edges.len());
         &self.edges[start..end]
     }
 }

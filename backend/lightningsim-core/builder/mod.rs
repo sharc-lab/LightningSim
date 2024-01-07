@@ -478,8 +478,8 @@ impl SimulationComponentBuilders {
     }
 
     fn finalize_event(&mut self, frame: &mut StackFrame, event: &Event) {
-        match event {
-            &Event::AxiReadRequest {
+        match *event {
+            Event::AxiReadRequest {
                 interface,
                 rctl_txn,
                 ..
@@ -490,7 +490,7 @@ impl SimulationComponentBuilders {
                     .or_default()
                     .push(&mut self.edges, rctl_txn);
             }
-            &Event::SubcallStart { module_key, .. } => {
+            Event::SubcallStart { module_key, .. } => {
                 for (interface, sub_axi_rctl) in
                     mem::take(self.modules.get_axi_rctl_mut(module_key))
                 {

@@ -68,13 +68,13 @@ impl EdgeBuilder {
             &mut DestinationRedirected(redirected_key) => {
                 let delay = *delay;
                 self.incomplete_edges.remove(key);
-                return self.update_source(
+                self.update_source(
                     redirected_key,
                     NodeWithDelay {
                         node: source.node,
                         delay,
                     },
-                );
+                )
             }
             SourceKnown(..) => panic!("source already exists"),
         }
@@ -116,7 +116,7 @@ impl EdgeBuilder {
             DestinationKnown(..) => drop(self.incomplete_edges.remove(key)),
             &mut DestinationRedirected(redirected_key) => {
                 self.incomplete_edges.remove(key);
-                return self.void_source(redirected_key);
+                self.void_source(redirected_key)
             }
             SourceKnown(..) => panic!("source already exists"),
         }
@@ -130,7 +130,7 @@ impl EdgeBuilder {
             SourceKnown(..) => drop(self.incomplete_edges.remove(key)),
             &mut SourceRedirected(redirected_key) => {
                 self.incomplete_edges.remove(key);
-                return self.void_destination(redirected_key);
+                self.void_destination(redirected_key)
             }
             DestinationKnown(..) => panic!("destination already exists"),
         }
@@ -199,7 +199,7 @@ impl TryFrom<EdgeBuilder> for SimulationGraph {
     fn try_from(value: EdgeBuilder) -> Result<Self, Self::Error> {
         let edge_iter_1 = value.edges.into_iter();
         let edge_iter_2 = edge_iter_1.clone();
-        let edges: Box<[Edge]> = edge_iter_1.filter_map(|edge| edge).collect();
+        let edges: Box<[Edge]> = edge_iter_1.flatten().collect();
         let voided_count: Box<[usize]> = edge_iter_2
             .scan(0, |voided_count, edge| {
                 let current_voided_count = *voided_count;

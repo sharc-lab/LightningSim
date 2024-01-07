@@ -83,7 +83,7 @@ impl AxiRctl {
             }
             Overflowed { head, tail } => {
                 let overlap_len = head.len();
-                for transaction in head.into_iter() {
+                for transaction in head.iter() {
                     self.push(
                         edge_builder,
                         RctlTransaction {
@@ -123,7 +123,7 @@ impl AxiRctl {
                 }
             }
             Overflowed { head, tail } => {
-                for transaction in head.into_iter() {
+                for transaction in head.iter() {
                     edge_builder.void_source(transaction.in_edge);
                 }
                 for transaction in tail {

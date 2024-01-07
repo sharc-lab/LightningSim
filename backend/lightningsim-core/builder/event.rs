@@ -143,9 +143,6 @@ impl Event {
     /// Whether this event is stalled by other events occurring in the same
     /// stage.
     pub fn is_stalled(&self) -> bool {
-        match self {
-            Event::SubcallStart { .. } => false,
-            _ => true,
-        }
+        !matches!(self, Event::SubcallStart { .. })
     }
 }
