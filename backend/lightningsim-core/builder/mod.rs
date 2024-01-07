@@ -1,4 +1,5 @@
 mod axi_builder;
+mod axi_rctl;
 mod edge_builder;
 mod event;
 mod fifo_builder;
@@ -7,7 +8,7 @@ mod module_builder;
 mod node;
 mod tee;
 
-use std::mem;
+use std::{collections::hash_map::Entry, mem};
 
 use axi_builder::{
     AxiBuilder, AxiRequestRange, InsertedAxiRead, InsertedAxiReadReq, InsertedAxiWrite,
@@ -284,11 +285,14 @@ impl SimulationComponentBuilders {
         let read_edge = self
             .edges
             .insert_edge(IncompleteEdgeType::AxiRead(interface));
+        let rctl_in_edge = self
+            .edges
+            .insert_edge(IncompleteEdgeType::AxiRctl(interface));
         let rctl_out_edge = self
             .edges
             .insert_edge(IncompleteEdgeType::AxiRctl(interface));
-        let InsertedAxiReadReq { index } =
-            builder.insert_readreq(request, read_edge, rctl_out_edge);
+        let InsertedAxiReadReq { index, rctl_txn } =
+            builder.insert_readreq(request, read_edge, rctl_in_edge, rctl_out_edge);
         self.add_event(
             frame,
             safe_offset,
@@ -297,6 +301,7 @@ impl SimulationComponentBuilders {
                 interface,
                 index,
                 read_edge,
+                rctl_txn,
             },
         );
     }
@@ -331,7 +336,7 @@ impl SimulationComponentBuilders {
     ) {
         let InsertedAxiRead {
             index,
-            first_read_data,
+            first_read,
             rctl_out_edge,
         } = self.axi.entry(interface).or_default().insert_read();
         self.add_event(
@@ -341,7 +346,7 @@ impl SimulationComponentBuilders {
             Event::AxiRead {
                 interface,
                 index,
-                first_read_data,
+                first_read,
                 rctl_out_edge,
             },
         );
@@ -456,6 +461,9 @@ impl SimulationComponentBuilders {
                 },
             ),
             None => {
+                for axi_rctl in mem::take(self.modules.get_axi_rctl_mut(frame.key)).into_values() {
+                    axi_rctl.finish(&mut self.edges);
+                }
                 let deferred = self
                     .modules
                     .commit_module(frame.key, NodeWithDelay { node: 0, delay: 0 });
@@ -466,6 +474,37 @@ impl SimulationComponentBuilders {
                 self.end_node = Some(self.edges.insert_node());
                 self.edges.push_destination(frame.current_edge);
             }
+        }
+    }
+
+    fn finalize_event(&mut self, frame: &mut StackFrame, event: &Event) {
+        match event {
+            &Event::AxiReadRequest {
+                interface,
+                rctl_txn,
+                ..
+            } => {
+                self.modules
+                    .get_axi_rctl_mut(frame.key)
+                    .entry(interface)
+                    .or_default()
+                    .push(&mut self.edges, rctl_txn);
+            }
+            &Event::SubcallStart { module_key, .. } => {
+                for (interface, sub_axi_rctl) in
+                    mem::take(self.modules.get_axi_rctl_mut(module_key))
+                {
+                    match self.modules.get_axi_rctl_mut(frame.key).entry(interface) {
+                        Entry::Occupied(mut entry) => {
+                            entry.get_mut().extend(&mut self.edges, sub_axi_rctl);
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(sub_axi_rctl);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -505,6 +544,7 @@ impl SimulationComponentBuilders {
                 interface,
                 index,
                 read_edge,
+                rctl_txn: _,
             } => {
                 self.axi
                     .get_mut(&interface)
@@ -515,7 +555,7 @@ impl SimulationComponentBuilders {
             Event::AxiRead {
                 interface,
                 index,
-                first_read_data,
+                first_read,
                 rctl_out_edge,
             } => {
                 let axi_builder = self.axi.get_mut(&interface).unwrap();
@@ -525,21 +565,11 @@ impl SimulationComponentBuilders {
                 }
                 if let Some(FirstReadData {
                     read_edge,
-                    readreq_burst,
-                }) = first_read_data
+                    rctl_in_edge,
+                }) = first_read
                 {
                     self.edges.push_destination(read_edge);
-                    let mut rctl_in_edge = None;
-                    while let Some(edge) = axi_builder.pop_rctl_edge() {
-                        let prev_rctl_in_edge = rctl_in_edge.replace(edge);
-                        if let Some(edge) = prev_rctl_in_edge {
-                            self.edges.void_destination(edge);
-                        }
-                    }
-                    if let Some(edge) = rctl_in_edge {
-                        self.edges.push_destination(edge);
-                    }
-                    axi_builder.add_burst(readreq_burst);
+                    self.edges.push_destination(rctl_in_edge);
                 }
             }
             Event::AxiWriteRequest { interface, index } => {
@@ -603,6 +633,7 @@ impl SimulationComponentBuilders {
                 true => stalled_time,
                 false => unstalled_time,
             };
+            self.finalize_event(frame, &event);
             match event_time {
                 NodeTime::Absolute(node) => self.commit_event(event, node),
                 NodeTime::RelativeToStart(delay) => {
@@ -650,13 +681,7 @@ impl TryFrom<SimulationBuilder> for CompiledSimulation {
 impl TryFrom<SimulationComponentBuilders> for CompiledSimulation {
     type Error = PyErr;
 
-    fn try_from(mut value: SimulationComponentBuilders) -> Result<Self, Self::Error> {
-        for axi_builder in value.axi.values_mut() {
-            for incomplete_edge in axi_builder.finish() {
-                value.edges.void_destination(incomplete_edge);
-            }
-        }
-
+    fn try_from(value: SimulationComponentBuilders) -> Result<Self, Self::Error> {
         Ok(CompiledSimulation {
             graph: value.edges.try_into()?,
             top_module: value.modules.try_into()?,

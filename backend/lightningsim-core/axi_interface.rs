@@ -6,9 +6,10 @@ use crate::{node::NodeWithDelay, ClockCycle};
 
 pub const AXI_READ_OVERHEAD: ClockCycle = 12;
 pub const AXI_WRITE_OVERHEAD: ClockCycle = 7;
-pub const MAX_RCTL_DEPTH: usize = 16;
+pub const MAX_RCTL_DEPTH: RctlDepth = 16;
 
 pub type AxiAddress = u64;
+pub type RctlDepth = u8;
 
 #[pyclass]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -27,10 +28,10 @@ pub struct AxiAddressRange {
 }
 
 impl AxiAddressRange {
-    pub fn burst_count(&self) -> usize {
+    pub fn burst_count(&self) -> RctlDepth {
         (((self.offset + self.length - 1) / 4096) - (self.offset / 4096) + 1)
             .try_into()
-            .unwrap()
+            .unwrap_or(MAX_RCTL_DEPTH)
     }
 }
 

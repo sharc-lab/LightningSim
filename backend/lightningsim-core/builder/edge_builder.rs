@@ -224,7 +224,7 @@ impl TryFrom<EdgeBuilder> for SimulationGraph {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct IncompleteEdge {
     r#type: IncompleteEdgeType,
     delay: ClockCycle,
@@ -258,7 +258,7 @@ impl IncompleteEdge {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum IncompleteEdgeEndpoints {
     EndpointsUnknown,
     SourceKnown(Option<NodeIndex>),

@@ -1,7 +1,8 @@
 use crate::{axi_interface::AxiInterface, fifo::Fifo};
 
 use super::{
-    axi_builder::FirstReadData, edge_builder::IncompleteEdgeKey, module_builder::ModuleKey,
+    axi_builder::FirstReadData, axi_rctl::RctlTransaction, edge_builder::IncompleteEdgeKey,
+    module_builder::ModuleKey,
 };
 
 /// Some event that impacts the global simulation state, as seen from the
@@ -66,11 +67,12 @@ pub enum Event {
         /// [AxiRead]: super::edge_builder::IncompleteEdgeType::AxiRead
         /// [EdgeBuilder::incomplete_edges]: super::edge_builder::EdgeBuilder::incomplete_edges
         read_edge: IncompleteEdgeKey,
+        rctl_txn: RctlTransaction,
     },
     AxiRead {
         interface: AxiInterface,
         index: usize,
-        first_read_data: Option<FirstReadData>,
+        first_read: Option<FirstReadData>,
 
         /// The key of the [AxiRctl] edge within [EdgeBuilder::incomplete_edges]
         /// whose source should be this read.
@@ -130,9 +132,7 @@ impl Event {
             Event::FifoRead { .. } => true,
             Event::AxiReadRequest { .. } => false,
             // Can induce an Edge::AxiRctl and/or an Edge::AxiRead.
-            Event::AxiRead {
-                first_read_data, ..
-            } => first_read_data.is_some(),
+            Event::AxiRead { first_read, .. } => first_read.is_some(),
             Event::AxiWriteRequest { .. } => false,
             Event::AxiWrite { .. } => false,
             // Induces an Edge::AxiWriteResp.

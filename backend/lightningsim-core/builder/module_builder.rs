@@ -1,10 +1,11 @@
+use rustc_hash::FxHashMap;
 use slab::Slab;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{node::NodeWithDelay, ClockCycle, CompiledModule};
+use crate::{axi_interface::AxiInterface, node::NodeWithDelay, ClockCycle, CompiledModule};
 
-use super::{event::Event, node::NodeTime};
+use super::{axi_rctl::AxiRctl, event::Event, node::NodeTime};
 
 pub type ModuleKey = usize;
 
@@ -51,6 +52,10 @@ impl ModuleBuilder {
         self.uncommitted[key].events.push((delay, event));
     }
 
+    pub fn get_axi_rctl_mut(&mut self, key: ModuleKey) -> &mut FxHashMap<AxiInterface, AxiRctl> {
+        &mut self.uncommitted[key].axi_rctl
+    }
+
     /// Given a module key and the parent node of the module with that key,
     /// commit the module.
     ///
@@ -69,6 +74,7 @@ impl ModuleBuilder {
             inherit_ap_continue,
             submodule_indices,
             events,
+            axi_rctl: _,
         } = self.uncommitted.remove(key);
         let start = parent + start_delay;
         let end = end.resolve(start);
@@ -144,6 +150,7 @@ struct UncommittedModule {
     inherit_ap_continue: bool,
     submodule_indices: Vec<usize>,
     events: Vec<(ClockCycle, Event)>,
+    axi_rctl: FxHashMap<AxiInterface, AxiRctl>,
 }
 
 impl UncommittedModule {
@@ -161,6 +168,7 @@ impl UncommittedModule {
             inherit_ap_continue,
             submodule_indices: Vec::new(),
             events: Vec::new(),
+            axi_rctl: FxHashMap::default(),
         }
     }
 }

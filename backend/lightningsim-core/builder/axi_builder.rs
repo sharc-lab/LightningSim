@@ -1,13 +1,8 @@
-use std::collections::VecDeque;
-use std::mem;
-
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use super::edge_builder::IncompleteEdgeKey;
+use super::{axi_rctl::RctlTransaction, edge_builder::IncompleteEdgeKey};
 use crate::{
-    axi_interface::{
-        AxiAddress, AxiAddressRange, AxiGenericIoNode, AxiInterfaceIoNodes, MAX_RCTL_DEPTH,
-    },
+    axi_interface::{AxiAddress, AxiAddressRange, AxiGenericIoNode, AxiInterfaceIoNodes},
     node::NodeWithDelay,
 };
 
@@ -28,7 +23,7 @@ pub struct AxiBuilder {
     /// The builder for [AxiInterfaceIoNodes::writeresps].
     writeresps: Vec<Option<NodeWithDelay>>,
 
-    first_read_data: Option<BuilderFirstReadData>,
+    first_read: Option<FirstReadData>,
     writeresp_edge: IncompleteEdgeKey,
 
     current_read: AxiAddressRange,
@@ -36,14 +31,6 @@ pub struct AxiBuilder {
     readreq_rctl_out_edge: IncompleteEdgeKey,
     current_write: AxiAddressRange,
     writereq_writes_remaining: u32,
-    rctl_depth: usize,
-    rctl_bursts: VecDeque<RctlBurst>,
-}
-
-#[derive(Clone)]
-struct BuilderFirstReadData {
-    read_edge: IncompleteEdgeKey,
-    burst_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -62,19 +49,20 @@ pub struct AxiRequestRange {
 /// A newly created AXI read request.
 pub struct InsertedAxiReadReq {
     pub index: usize,
+    pub rctl_txn: RctlTransaction,
 }
 
 /// A newly created AXI read.
 pub struct InsertedAxiRead {
     pub index: usize,
-    pub first_read_data: Option<FirstReadData>,
+    pub first_read: Option<FirstReadData>,
     pub rctl_out_edge: Option<IncompleteEdgeKey>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FirstReadData {
     pub read_edge: IncompleteEdgeKey,
-    pub readreq_burst: RctlBurst,
+    pub rctl_in_edge: IncompleteEdgeKey,
 }
 
 /// A newly created AXI write request.
@@ -99,12 +87,6 @@ pub struct WriteRespEdgeNeeded<'a> {
     builder: &'a mut AxiBuilder,
 }
 
-#[derive(Clone, Debug)]
-pub struct RctlBurst {
-    pub burst_count: usize,
-    pub rctl_edge: IncompleteEdgeKey,
-}
-
 impl AxiBuilder {
     pub fn new() -> Self {
         Self {
@@ -113,7 +95,7 @@ impl AxiBuilder {
             writereqs: Vec::new(),
             writes: Vec::new(),
             writeresps: Vec::new(),
-            first_read_data: None,
+            first_read: None,
             writeresp_edge: 0,
             current_read: AxiAddressRange {
                 offset: 0,
@@ -126,8 +108,6 @@ impl AxiBuilder {
                 length: 0,
             },
             writereq_writes_remaining: 0,
-            rctl_depth: 0,
-            rctl_bursts: VecDeque::with_capacity(MAX_RCTL_DEPTH),
         }
     }
 
@@ -135,6 +115,7 @@ impl AxiBuilder {
         &mut self,
         request: AxiRequestRange,
         read_edge: IncompleteEdgeKey,
+        rctl_in_edge: IncompleteEdgeKey,
         rctl_out_edge: IncompleteEdgeKey,
     ) -> InsertedAxiReadReq {
         let range = request.range();
@@ -143,14 +124,21 @@ impl AxiBuilder {
             .push(AxiGenericIoOptionalNode { node: None, range });
 
         self.current_read = request.front();
-        self.first_read_data = Some(BuilderFirstReadData {
+        self.first_read = Some(FirstReadData {
             read_edge,
-            burst_count: range.burst_count(),
+            rctl_in_edge,
         });
         self.readreq_rctl_out_edge = rctl_out_edge;
         self.readreq_reads_remaining = request.count;
 
-        InsertedAxiReadReq { index }
+        InsertedAxiReadReq {
+            index,
+            rctl_txn: RctlTransaction {
+                burst_count: range.burst_count(),
+                in_edge: rctl_in_edge,
+                out_edge: rctl_out_edge,
+            },
+        }
     }
 
     pub fn insert_writereq(&mut self, request: AxiRequestRange) -> InsertedAxiWriteReq {
@@ -175,18 +163,7 @@ impl AxiBuilder {
 
         self.readreq_reads_remaining -= 1;
         let is_last_of_readreq = self.readreq_reads_remaining == 0;
-        let first_read_data = self.first_read_data.take().map(
-            |BuilderFirstReadData {
-                 read_edge,
-                 burst_count,
-             }| FirstReadData {
-                read_edge,
-                readreq_burst: RctlBurst {
-                    burst_count,
-                    rctl_edge: self.readreq_rctl_out_edge,
-                },
-            },
-        );
+        let first_read = self.first_read.take();
         let rctl_out_edge = match is_last_of_readreq {
             true => Some(self.readreq_rctl_out_edge),
             false => None,
@@ -194,7 +171,7 @@ impl AxiBuilder {
 
         InsertedAxiRead {
             index,
-            first_read_data,
+            first_read,
             rctl_out_edge,
         }
     }
@@ -254,27 +231,6 @@ impl AxiBuilder {
         debug_assert!(self.writeresps[index].is_none());
         self.writeresps[index] = Some(node);
     }
-
-    /// Returns an iterator of edges to void.
-    pub fn finish(&mut self) -> impl Iterator<Item = IncompleteEdgeKey> {
-        mem::take(&mut self.rctl_bursts)
-            .into_iter()
-            .map(|burst| burst.rctl_edge)
-    }
-
-    pub fn pop_rctl_edge(&mut self) -> Option<IncompleteEdgeKey> {
-        if self.rctl_depth < MAX_RCTL_DEPTH {
-            return None;
-        }
-        let burst = self.rctl_bursts.pop_front().unwrap();
-        self.rctl_depth -= burst.burst_count;
-        Some(burst.rctl_edge)
-    }
-
-    pub fn add_burst(&mut self, burst: RctlBurst) {
-        self.rctl_depth += burst.burst_count;
-        self.rctl_bursts.push_back(burst);
-    }
 }
 
 impl Default for AxiBuilder {
@@ -305,8 +261,9 @@ impl TryFrom<AxiBuilder> for AxiInterfaceIoNodes {
             .map(|write| write.into())
             .collect();
         let writeresps: Option<Box<[NodeWithDelay]>> = builder.writeresps.into_iter().collect();
-        let initialized_all_edges =
-            builder.first_read_data.is_none() && builder.rctl_bursts.is_empty();
+        let initialized_all_edges = builder.first_read.is_none()
+            && builder.readreq_reads_remaining == 0
+            && builder.writereq_writes_remaining == 0;
         match (
             readreqs,
             reads,
@@ -329,7 +286,7 @@ impl TryFrom<AxiBuilder> for AxiInterfaceIoNodes {
                 writes,
                 writeresps,
             }),
-            _ => Err(PyValueError::new_err("incomplete edges remain")),
+            _ => Err(PyValueError::new_err("incomplete AXI edges remain")),
         }
     }
 }

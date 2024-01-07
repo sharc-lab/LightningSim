@@ -70,7 +70,7 @@ impl TryFrom<FifoBuilder> for FifoIoNodes {
         let initialized_all_edges = builder.raw_edges.is_empty();
         match (writes, reads, initialized_all_edges) {
             (Some(writes), Some(reads), true) => Ok(FifoIoNodes { writes, reads }),
-            _ => Err(PyValueError::new_err("incomplete edges remain")),
+            _ => Err(PyValueError::new_err("incomplete FIFO edges remain")),
         }
     }
 }
