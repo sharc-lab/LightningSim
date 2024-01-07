@@ -26,6 +26,7 @@ const SAXI_STATUS_WRITE_DELAY: ClockCycle = 6;
 
 pub type ClockCycle = u64;
 pub type SimulationStage = u32;
+pub(crate) type SimulationResult = Result<Vec<ClockCycle>, SimulationError>;
 
 #[pyclass]
 #[derive(Clone)]
@@ -52,6 +53,13 @@ pub(crate) struct CompiledModule {
     pub end: NodeWithDelay,
     pub submodules: Box<[CompiledModule]>,
     pub inherit_ap_continue: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum SimulationError {
+    DeadlockDetected,
+    FifoDepthNotProvided(FifoId),
+    AxiDelayNotProvided(AxiAddress),
 }
 
 #[derive(Clone, FromPyObject)]
@@ -86,7 +94,7 @@ pub struct SimulatedModule {
 }
 
 impl CompiledSimulation {
-    fn resolve(&self, parameters: &SimulationParameters) -> PyResult<Vec<ClockCycle>> {
+    fn resolve(&self, parameters: &SimulationParameters) -> SimulationResult {
         let node_count = self.graph.node_offsets.len();
         let mut node_cycles = vec![0; node_count];
         let mut visited = bitvec![0; node_count];
@@ -122,7 +130,7 @@ impl CompiledSimulation {
                     continue;
                 }
                 if visiting[node_usize] {
-                    return Err(PyValueError::new_err("deadlock detected"));
+                    return Err(SimulationError::DeadlockDetected);
                 }
 
                 visiting.set(node_usize, true);
@@ -193,6 +201,14 @@ impl CompiledSimulation {
         })
     }
 
+    fn node_count(&self) -> usize {
+        self.graph.node_offsets.len()
+    }
+
+    fn edge_count(&self) -> usize {
+        self.graph.edges.len()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "CompiledSimulation(graph={:?}, end_node={:?})",
@@ -234,23 +250,22 @@ impl fmt::Debug for SimulationGraph {
 }
 
 impl SimulationParameters {
-    pub(crate) fn get_fifo_depth(&self, fifo: Fifo) -> PyResult<Option<usize>> {
-        self.fifo_depths.get(&fifo.id).copied().ok_or_else(|| {
-            PyValueError::new_err(format!("no depth provided for FIFO with id {}", fifo.id))
-        })
+    pub(crate) fn get_fifo_depth(&self, fifo: Fifo) -> Result<Option<usize>, SimulationError> {
+        self.fifo_depths
+            .get(&fifo.id)
+            .copied()
+            .ok_or(SimulationError::FifoDepthNotProvided(fifo.id))
     }
 
-    pub(crate) fn get_axi_delay(&self, interface: AxiInterface) -> PyResult<ClockCycle> {
+    pub(crate) fn get_axi_delay(
+        &self,
+        interface: AxiInterface,
+    ) -> Result<ClockCycle, SimulationError> {
         let delay = self
             .axi_delays
             .get(&interface.address)
             .copied()
-            .ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "no delay provided for AXI interface with address {:#010x}",
-                    interface.address
-                ))
-            })?;
+            .ok_or(SimulationError::AxiDelayNotProvided(interface.address))?;
         Ok(cmp::max(delay, 1))
     }
 }
@@ -309,6 +324,28 @@ impl SimulatedModule {
                 .map(|submodule| SimulatedModule::new(node_cycles, submodule, ap_continue))
                 .collect(),
         }
+    }
+}
+
+impl fmt::Display for SimulationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DeadlockDetected => write!(f, "deadlock detected"),
+            Self::FifoDepthNotProvided(fifo_id) => {
+                write!(f, "no depth provided for FIFO with id {}", fifo_id)
+            }
+            Self::AxiDelayNotProvided(interface_address) => write!(
+                f,
+                "no delay provided for AXI interface with address {:#010x}",
+                interface_address
+            ),
+        }
+    }
+}
+
+impl From<SimulationError> for PyErr {
+    fn from(value: SimulationError) -> Self {
+        PyValueError::new_err(value.to_string())
     }
 }
 

@@ -1,10 +1,8 @@
-use pyo3::prelude::*;
-
 use crate::{
     axi_interface::{AxiInterface, AXI_READ_OVERHEAD, AXI_WRITE_OVERHEAD},
     fifo::{Fifo, FifoType},
     node::NodeWithDelay,
-    CompiledSimulation, SimulationParameters,
+    CompiledSimulation, SimulationError, SimulationParameters,
 };
 
 pub type EdgeIndex = usize;
@@ -79,7 +77,7 @@ impl Edge {
         &self,
         simulation: &CompiledSimulation,
         parameters: &SimulationParameters,
-    ) -> PyResult<Option<NodeWithDelay>> {
+    ) -> Result<Option<NodeWithDelay>, SimulationError> {
         match *self {
             Edge::ControlFlow(node) => Ok(Some(node)),
             Edge::FifoRaw { u, fifo } => {
