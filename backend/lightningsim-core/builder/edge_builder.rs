@@ -52,7 +52,10 @@ impl EdgeBuilder {
     }
 
     pub fn update_source(&mut self, key: IncompleteEdgeKey, source: NodeWithDelay) {
-        use IncompleteEdgeEndpoints::*;
+        use IncompleteEdgeEndpoints::{
+            DestinationKnown, DestinationRedirected, EndpointsUnknown, SourceKnown,
+            SourceRedirected,
+        };
         let IncompleteEdge {
             endpoints, delay, ..
         } = &mut self.incomplete_edges[key];
@@ -74,14 +77,17 @@ impl EdgeBuilder {
                         node: source.node,
                         delay,
                     },
-                )
+                );
             }
             SourceKnown(..) => panic!("source already exists"),
         }
     }
 
     pub fn push_destination(&mut self, key: IncompleteEdgeKey) {
-        use IncompleteEdgeEndpoints::*;
+        use IncompleteEdgeEndpoints::{
+            DestinationKnown, DestinationRedirected, EndpointsUnknown, SourceKnown,
+            SourceRedirected,
+        };
         let IncompleteEdge {
             endpoints, delay, ..
         } = &mut self.incomplete_edges[key];
@@ -109,35 +115,44 @@ impl EdgeBuilder {
     }
 
     pub fn void_source(&mut self, key: IncompleteEdgeKey) {
-        use IncompleteEdgeEndpoints::*;
+        use IncompleteEdgeEndpoints::{
+            DestinationKnown, DestinationRedirected, EndpointsUnknown, SourceKnown,
+            SourceRedirected,
+        };
         let endpoints = &mut self.incomplete_edges[key].endpoints;
         match endpoints {
             EndpointsUnknown | SourceRedirected(..) => *endpoints = SourceKnown(None),
             DestinationKnown(..) => drop(self.incomplete_edges.remove(key)),
             &mut DestinationRedirected(redirected_key) => {
                 self.incomplete_edges.remove(key);
-                self.void_source(redirected_key)
+                self.void_source(redirected_key);
             }
             SourceKnown(..) => panic!("source already exists"),
         }
     }
 
     pub fn void_destination(&mut self, key: IncompleteEdgeKey) {
-        use IncompleteEdgeEndpoints::*;
+        use IncompleteEdgeEndpoints::{
+            DestinationKnown, DestinationRedirected, EndpointsUnknown, SourceKnown,
+            SourceRedirected,
+        };
         let endpoints = &mut self.incomplete_edges[key].endpoints;
         match endpoints {
             EndpointsUnknown | DestinationRedirected(..) => *endpoints = DestinationKnown(None),
             SourceKnown(..) => drop(self.incomplete_edges.remove(key)),
             &mut SourceRedirected(redirected_key) => {
                 self.incomplete_edges.remove(key);
-                self.void_destination(redirected_key)
+                self.void_destination(redirected_key);
             }
             DestinationKnown(..) => panic!("destination already exists"),
         }
     }
 
     pub fn join(&mut self, source_edge: IncompleteEdgeKey, destination_edge: IncompleteEdgeKey) {
-        use IncompleteEdgeEndpoints::*;
+        use IncompleteEdgeEndpoints::{
+            DestinationKnown, DestinationRedirected, EndpointsUnknown, SourceKnown,
+            SourceRedirected,
+        };
         let (
             IncompleteEdge {
                 r#type: source_type,
@@ -214,13 +229,14 @@ impl TryFrom<EdgeBuilder> for SimulationGraph {
             .into_iter()
             .map(|offset| offset - voided_count[offset])
             .collect();
-        match value.incomplete_edges.is_empty() {
-            true => Ok(SimulationGraph {
+        value
+            .incomplete_edges
+            .is_empty()
+            .then_some(SimulationGraph {
                 node_offsets,
                 edges,
-            }),
-            false => Err(PyValueError::new_err("incomplete edges remain")),
-        }
+            })
+            .ok_or_else(|| PyValueError::new_err("incomplete edges remain"))
     }
 }
 
@@ -243,11 +259,11 @@ impl IncompleteEdge {
 
 impl IncompleteEdge {
     fn into_edge(self, source: NodeIndex) -> Edge {
+        use IncompleteEdgeType::{AxiRctl, AxiRead, AxiWriteResp, ControlFlow, FifoRaw};
         let u = NodeWithDelay {
             node: source,
             delay: self.delay,
         };
-        use IncompleteEdgeType::*;
         match self.r#type {
             ControlFlow => Edge::ControlFlow(u),
             FifoRaw(fifo) => Edge::FifoRaw { u, fifo },

@@ -25,7 +25,7 @@ pub enum NodeTime {
 
 impl UncommittedNode {
     pub fn is_own_node(&self) -> bool {
-        self.events.iter().any(|event| event.has_in_edge())
+        self.events.iter().any(Event::has_in_edge)
     }
 }
 

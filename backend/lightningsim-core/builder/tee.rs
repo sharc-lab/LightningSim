@@ -31,15 +31,13 @@ impl<T> Default for Tee<T> {
 
 impl<T> Tee<T> {
     pub fn next(&mut self, consumer: TeeConsumer) -> TeeResult<T> {
-        let value = if self.leader != consumer {
-            self.queue.pop_front()
-        } else {
-            None
-        };
-        value.ok_or(TeeEmptyError {
-            tee: self,
-            consumer,
-        })
+        (self.leader != consumer)
+            .then(|| self.queue.pop_front())
+            .flatten()
+            .ok_or(TeeEmptyError {
+                tee: self,
+                consumer,
+            })
     }
 
     pub fn is_empty(&self) -> bool {

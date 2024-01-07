@@ -80,33 +80,33 @@ impl Edge {
         simulation: &CompiledSimulation,
         parameters: &SimulationParameters,
     ) -> PyResult<Option<NodeWithDelay>> {
-        match self {
-            Edge::ControlFlow(node) => Ok(Some(*node)),
+        match *self {
+            Edge::ControlFlow(node) => Ok(Some(node)),
             Edge::FifoRaw { u, fifo } => {
                 let depth = parameters.get_fifo_depth(fifo)?;
                 let fifo_type = FifoType::from_depth(depth);
-                Ok(Some(*u + fifo_type.raw_delay()))
+                Ok(Some(u + fifo_type.raw_delay()))
             }
             Edge::FifoWar { fifo, index } => {
                 let depth = parameters.get_fifo_depth(fifo)?;
                 Ok(depth
                     .and_then(|depth| index.checked_sub(depth))
                     .map(|index| NodeWithDelay {
-                        node: simulation.fifo_nodes[fifo].reads[index],
+                        node: simulation.fifo_nodes[&fifo].reads[index],
                         delay: FifoType::from_depth(depth).war_delay(),
                     }))
             }
             Edge::AxiRctl { u, interface } => {
                 let delay = parameters.get_axi_delay(interface)?;
-                Ok(Some(*u + (delay + AXI_READ_OVERHEAD - AXI_WRITE_OVERHEAD)))
+                Ok(Some(u + (delay + AXI_READ_OVERHEAD - AXI_WRITE_OVERHEAD)))
             }
             Edge::AxiRead { u, interface } => {
                 let delay = parameters.get_axi_delay(interface)?;
-                Ok(Some(*u + (delay + AXI_READ_OVERHEAD)))
+                Ok(Some(u + (delay + AXI_READ_OVERHEAD)))
             }
             Edge::AxiWriteResp { u, interface } => {
                 let delay = parameters.get_axi_delay(interface)?;
-                Ok(Some(*u + (delay + AXI_WRITE_OVERHEAD)))
+                Ok(Some(u + (delay + AXI_WRITE_OVERHEAD)))
             }
         }
     }

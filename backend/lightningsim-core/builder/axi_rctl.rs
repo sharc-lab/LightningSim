@@ -34,7 +34,7 @@ struct RctlHeadTransaction {
 
 impl AxiRctl {
     pub fn push(&mut self, edge_builder: &mut EdgeBuilder, transaction: RctlTransaction) {
-        use AxiRctlState::*;
+        use AxiRctlState::{Overflowed, WithinCapacity};
 
         let mut blocking_out_edge = None;
         while self.depth >= MAX_RCTL_DEPTH {
@@ -44,7 +44,7 @@ impl AxiRctl {
                 out_edge,
             } = match &mut self.state {
                 WithinCapacity(queue) => {
-                    let head = queue.iter().map(|txn| txn.into()).collect();
+                    let head = queue.iter().map(Into::into).collect();
                     let front = queue.pop_front().unwrap();
                     let tail = mem::take(queue);
                     self.state = Overflowed { head, tail };
@@ -74,7 +74,7 @@ impl AxiRctl {
     }
 
     pub fn extend(&mut self, edge_builder: &mut EdgeBuilder, other: AxiRctl) {
-        use AxiRctlState::*;
+        use AxiRctlState::{Overflowed, WithinCapacity};
         match other.state {
             WithinCapacity(queue) => {
                 for transaction in queue {
@@ -114,7 +114,7 @@ impl AxiRctl {
     }
 
     pub fn finish(self, edge_builder: &mut EdgeBuilder) {
-        use AxiRctlState::*;
+        use AxiRctlState::{Overflowed, WithinCapacity};
         match self.state {
             WithinCapacity(queue) => {
                 for transaction in queue {

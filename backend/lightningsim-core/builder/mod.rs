@@ -116,7 +116,7 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_readreq(frame, safe_offset, stage, interface, request);
+                .add_axi_readreq(frame, safe_offset, stage, interface, &request);
         }
     }
 
@@ -132,7 +132,7 @@ impl SimulationBuilder {
                 address: interface_address,
             };
             self.builders
-                .add_axi_writereq(frame, safe_offset, stage, interface, request);
+                .add_axi_writereq(frame, safe_offset, stage, interface, &request);
         }
     }
 
@@ -279,7 +279,7 @@ impl SimulationComponentBuilders {
         safe_offset: SimulationStage,
         stage: SimulationStage,
         interface: AxiInterface,
-        request: AxiRequestRange,
+        request: &AxiRequestRange,
     ) {
         let builder = self.axi.entry(interface).or_default();
         let read_edge = self
@@ -312,7 +312,7 @@ impl SimulationComponentBuilders {
         safe_offset: SimulationStage,
         stage: SimulationStage,
         interface: AxiInterface,
-        request: AxiRequestRange,
+        request: &AxiRequestRange,
     ) {
         let InsertedAxiWriteReq { index } = self
             .axi
@@ -440,7 +440,7 @@ impl SimulationComponentBuilders {
         end_stage: SimulationStage,
     ) {
         while let Some(uncommitted_node) = frame.window.pop_front() {
-            let advance_by = if !frame.window.is_empty() { 1 } else { 0 };
+            let advance_by = SimulationStage::from(!frame.window.is_empty());
             self.commit_node(&mut frame, uncommitted_node, advance_by);
         }
         if let Some(remaining_stages) = end_stage.checked_sub(frame.offset) {
@@ -453,27 +453,26 @@ impl SimulationComponentBuilders {
         self.modules
             .update_module_end(frame.key, frame.current_time);
 
-        match parent {
-            Some(parent) => parent.add_event(
+        if let Some(parent) = parent {
+            parent.add_event(
                 frame.parent_end,
                 Event::SubcallEnd {
                     edge: frame.current_edge,
                 },
-            ),
-            None => {
-                for axi_rctl in mem::take(self.modules.get_axi_rctl_mut(frame.key)).into_values() {
-                    axi_rctl.finish(&mut self.edges);
-                }
-                let deferred = self
-                    .modules
-                    .commit_module(frame.key, NodeWithDelay { node: 0, delay: 0 });
-                for (node, event) in deferred {
-                    debug_assert!(!event.has_in_edge());
-                    self.commit_event(event, node);
-                }
-                self.end_node = Some(self.edges.insert_node());
-                self.edges.push_destination(frame.current_edge);
+            );
+        } else {
+            for axi_rctl in mem::take(self.modules.get_axi_rctl_mut(frame.key)).into_values() {
+                axi_rctl.finish(&mut self.edges);
             }
+            let deferred = self
+                .modules
+                .commit_module(frame.key, NodeWithDelay { node: 0, delay: 0 });
+            for (node, event) in deferred {
+                debug_assert!(!event.has_in_edge());
+                self.commit_event(event, node);
+            }
+            self.end_node = Some(self.edges.insert_node());
+            self.edges.push_destination(frame.current_edge);
         }
     }
 
@@ -629,9 +628,10 @@ impl SimulationComponentBuilders {
             unstalled_time
         };
         for event in uncommitted_node.events {
-            let event_time = match event.is_stalled() {
-                true => stalled_time,
-                false => unstalled_time,
+            let event_time = if event.is_stalled() {
+                stalled_time
+            } else {
+                unstalled_time
             };
             self.finalize_event(frame, &event);
             match event_time {

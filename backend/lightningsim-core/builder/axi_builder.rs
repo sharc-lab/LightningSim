@@ -39,7 +39,7 @@ struct AxiGenericIoOptionalNode {
     range: AxiAddressRange,
 }
 
-#[derive(Clone, FromPyObject)]
+#[derive(Clone, Copy, FromPyObject)]
 pub struct AxiRequestRange {
     pub offset: AxiAddress,
     pub increment: AxiAddress,
@@ -113,7 +113,7 @@ impl AxiBuilder {
 
     pub fn insert_readreq(
         &mut self,
-        request: AxiRequestRange,
+        request: &AxiRequestRange,
         read_edge: IncompleteEdgeKey,
         rctl_in_edge: IncompleteEdgeKey,
         rctl_out_edge: IncompleteEdgeKey,
@@ -141,7 +141,7 @@ impl AxiBuilder {
         }
     }
 
-    pub fn insert_writereq(&mut self, request: AxiRequestRange) -> InsertedAxiWriteReq {
+    pub fn insert_writereq(&mut self, request: &AxiRequestRange) -> InsertedAxiWriteReq {
         let range = request.range();
         let index = self.writereqs.len();
         self.writereqs
@@ -164,10 +164,7 @@ impl AxiBuilder {
         self.readreq_reads_remaining -= 1;
         let is_last_of_readreq = self.readreq_reads_remaining == 0;
         let first_read = self.first_read.take();
-        let rctl_out_edge = match is_last_of_readreq {
-            true => Some(self.readreq_rctl_out_edge),
-            false => None,
-        };
+        let rctl_out_edge = is_last_of_readreq.then_some(self.readreq_rctl_out_edge);
 
         InsertedAxiRead {
             index,
@@ -243,23 +240,14 @@ impl TryFrom<AxiBuilder> for AxiInterfaceIoNodes {
     type Error = PyErr;
 
     fn try_from(builder: AxiBuilder) -> Result<AxiInterfaceIoNodes, Self::Error> {
-        let readreqs: Option<Box<[AxiGenericIoNode]>> = builder
-            .readreqs
-            .into_iter()
-            .map(|readreq| readreq.into())
-            .collect();
+        let readreqs: Option<Box<[AxiGenericIoNode]>> =
+            builder.readreqs.into_iter().map(Into::into).collect();
         let reads: Option<Box<[AxiGenericIoNode]>> =
-            builder.reads.into_iter().map(|read| read.into()).collect();
-        let writereqs: Option<Box<[AxiGenericIoNode]>> = builder
-            .writereqs
-            .into_iter()
-            .map(|writereq| writereq.into())
-            .collect();
-        let writes: Option<Box<[AxiGenericIoNode]>> = builder
-            .writes
-            .into_iter()
-            .map(|write| write.into())
-            .collect();
+            builder.reads.into_iter().map(Into::into).collect();
+        let writereqs: Option<Box<[AxiGenericIoNode]>> =
+            builder.writereqs.into_iter().map(Into::into).collect();
+        let writes: Option<Box<[AxiGenericIoNode]>> =
+            builder.writes.into_iter().map(Into::into).collect();
         let writeresps: Option<Box<[NodeWithDelay]>> = builder.writeresps.into_iter().collect();
         let initialized_all_edges = builder.first_read.is_none()
             && builder.readreq_reads_remaining == 0

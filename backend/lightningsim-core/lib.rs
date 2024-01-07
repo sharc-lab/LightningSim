@@ -234,13 +234,13 @@ impl fmt::Debug for SimulationGraph {
 }
 
 impl SimulationParameters {
-    pub(crate) fn get_fifo_depth(&self, fifo: &Fifo) -> PyResult<Option<usize>> {
+    pub(crate) fn get_fifo_depth(&self, fifo: Fifo) -> PyResult<Option<usize>> {
         self.fifo_depths.get(&fifo.id).copied().ok_or_else(|| {
             PyValueError::new_err(format!("no depth provided for FIFO with id {}", fifo.id))
         })
     }
 
-    pub(crate) fn get_axi_delay(&self, interface: &AxiInterface) -> PyResult<ClockCycle> {
+    pub(crate) fn get_axi_delay(&self, interface: AxiInterface) -> PyResult<ClockCycle> {
         let delay = self
             .axi_delays
             .get(&interface.address)
