@@ -351,10 +351,11 @@ async def resolve_trace(
                 if current_loop is not None:
                     end_stage+=current_loop.ii*frame.loop_idx
                     start_stage+=current_loop.ii*frame.loop_idx
-                safe_offset = start_stage - (
+                safe_offset = start_stage - min(
                     basic_block.end
                     - basic_block.length
-                    + event_instruction.latency.relative_start
+                    + event_instruction.latency.relative_start,
+                    start_stage,
                 )
 
                 if event_instruction.opcode == "call":
