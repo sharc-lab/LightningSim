@@ -81,17 +81,17 @@ impl Edge {
         match *self {
             Edge::ControlFlow(node) => Ok(Some(node)),
             Edge::FifoRaw { u, fifo } => {
-                let depth = parameters.get_fifo_depth(fifo)?;
-                let fifo_type = FifoType::from_depth(depth);
+                let depth = parameters.get_fifo_config(fifo)?;
+                let fifo_type = FifoType::from_config(depth);
                 Ok(Some(u + fifo_type.raw_delay()))
             }
             Edge::FifoWar { fifo, index } => {
-                let depth = parameters.get_fifo_depth(fifo)?;
-                Ok(depth
-                    .and_then(|depth| index.checked_sub(depth))
+                let config = parameters.get_fifo_config(fifo)?;
+                Ok(config
+                    .and_then(|config| index.checked_sub(config.depth.try_into().unwrap()))
                     .map(|index| NodeWithDelay {
                         node: simulation.fifo_nodes[&fifo].reads[index],
-                        delay: FifoType::from_depth(depth).war_delay(),
+                        delay: FifoType::from_config(config).war_delay(),
                     }))
             }
             Edge::AxiRctl { u, interface } => {

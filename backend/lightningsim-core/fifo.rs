@@ -1,4 +1,4 @@
-use std::ops;
+use std::{cmp, iter, ops};
 
 use pyo3::prelude::*;
 
@@ -19,6 +19,12 @@ const RAM_WAR_DELAY: ClockCycle = 1;
 pub struct Fifo {
     #[pyo3(get)]
     pub id: FifoId,
+}
+
+#[derive(Clone, Copy, FromPyObject)]
+pub struct FifoConfig {
+    pub width: u32,
+    pub depth: u32,
 }
 
 pub enum FifoType {
@@ -52,16 +58,107 @@ pub struct FifoIo {
     pub reads: Vec<ClockCycle>,
 }
 
-impl FifoType {
-    pub fn from_depth(depth: Option<usize>) -> Self {
-        match depth {
-            Some(depth) => {
-                if depth <= 2 {
-                    Self::ShiftRegister
-                } else {
-                    Self::Ram
-                }
+impl FifoConfig {
+    pub fn r#type(&self) -> FifoType {
+        // Vitis HLS automatically implements FIFOs as shift registers if they total
+        // 1024 bits or less.
+        if self.width * self.depth <= 1024 {
+            FifoType::ShiftRegister
+        } else {
+            FifoType::Ram
+        }
+    }
+
+    pub fn bram_count(&self) -> u32 {
+        if matches!(self.r#type(), FifoType::Ram) {
+            let mut bram_count = 0;
+            let mut remaining_width = self.width;
+
+            // BRAMs can be configured as 1Kx18...
+            bram_count += (remaining_width / 18) * ((self.depth + 1023) / 1024);
+            remaining_width %= 18;
+            if self.depth <= 1024 {
+                bram_count += u32::from(remaining_width != 0);
+                return bram_count;
             }
+
+            // ...and/or as 2Kx9...
+            bram_count += (remaining_width / 9) * ((self.depth + 2047) / 2048);
+            remaining_width %= 9;
+            if self.depth <= 2048 {
+                bram_count += u32::from(remaining_width != 0);
+                return bram_count;
+            }
+
+            // (Ad-hoc special case found empirically)
+            if self.depth <= 4096 && self.width > 18 && remaining_width == 3 {
+                bram_count += 2;
+                return bram_count;
+            }
+
+            // ...and/or as 4Kx4...
+            bram_count += (remaining_width / 4) * ((self.depth + 4095) / 4096);
+            remaining_width %= 4;
+            if self.depth <= 4096 {
+                bram_count += u32::from(remaining_width != 0);
+                return bram_count;
+            }
+
+            // ...and/or as 8Kx2...
+            bram_count += (remaining_width / 2) * ((self.depth + 8191) / 8192);
+            remaining_width %= 2;
+
+            // ...and/or as 16Kx1.
+            bram_count += remaining_width * ((self.depth + 16383) / 16384);
+            bram_count
+        } else {
+            0
+        }
+    }
+
+    pub fn max_depth_for_shift_register(width: u32) -> u32 {
+        1024 / cmp::max(width, 1)
+    }
+
+    pub fn get_design_space(width: u32, write_count: u32) -> Box<[Self]> {
+        let max_depth = cmp::max(write_count, 2);
+        let max_bram_count = FifoConfig {
+            width,
+            depth: max_depth,
+        }
+        .bram_count();
+
+        let initial_depth = cmp::min(
+            cmp::max(FifoConfig::max_depth_for_shift_register(width), 2),
+            max_depth,
+        );
+        let remaining_1 = (initial_depth..max_depth)
+            .step_by(1024)
+            .map(|depth| FifoConfig { width, depth });
+        let remaining_2 = remaining_1.clone();
+
+        iter::once(FifoConfig {
+            width,
+            depth: initial_depth,
+        })
+        .chain(remaining_1)
+        .take_while(|config| config.bram_count() != max_bram_count)
+        .zip(remaining_2)
+        .filter_map(|(config_1, config_2)| {
+            (config_1.bram_count() != config_2.bram_count()).then_some(config_1)
+        })
+        .chain(iter::once(FifoConfig {
+            width,
+            depth: max_depth,
+        }))
+        .collect()
+    }
+}
+
+impl FifoType {
+    pub fn from_config(config: Option<&FifoConfig>) -> Self {
+        match config {
+            Some(config) => config.r#type(),
             None => Self::ShiftRegister,
         }
     }

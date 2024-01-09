@@ -4,12 +4,12 @@ mod edge;
 mod fifo;
 mod node;
 
-use std::{cmp, fmt, iter};
+use std::{cmp, fmt, iter, sync::Arc};
 
 use axi_interface::{AxiAddress, AxiAddressRange, AxiGenericIo, AxiInterfaceIo};
 use bitvec::bitvec;
 use builder::SimulationBuilder;
-use fifo::{FifoId, FifoIo};
+use fifo::{FifoConfig, FifoId, FifoIo};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::FxHashMap;
 
@@ -33,8 +33,8 @@ pub(crate) type SimulationResult = Result<Vec<ClockCycle>, SimulationError>;
 pub struct CompiledSimulation {
     pub(crate) graph: SimulationGraph,
     pub(crate) top_module: CompiledModule,
-    pub(crate) fifo_nodes: FxHashMap<Fifo, FifoIoNodes>,
-    pub(crate) axi_interface_nodes: FxHashMap<AxiInterface, AxiInterfaceIoNodes>,
+    pub(crate) fifo_nodes: Arc<FxHashMap<Fifo, FifoIoNodes>>,
+    pub(crate) axi_interface_nodes: Arc<FxHashMap<AxiInterface, AxiInterfaceIoNodes>>,
     pub(crate) end_node: NodeIndex,
 }
 
@@ -58,13 +58,13 @@ pub(crate) struct CompiledModule {
 #[derive(Clone, Debug)]
 pub(crate) enum SimulationError {
     DeadlockDetected,
-    FifoDepthNotProvided(FifoId),
+    FifoConfigNotProvided(FifoId),
     AxiDelayNotProvided(AxiAddress),
 }
 
 #[derive(Clone, FromPyObject)]
 pub struct SimulationParameters {
-    fifo_depths: FxHashMap<FifoId, Option<usize>>,
+    fifo_configs: FxHashMap<FifoId, Option<FifoConfig>>,
     axi_delays: FxHashMap<AxiAddress, ClockCycle>,
     ap_ctrl_chain_top_port_count: Option<u32>,
 }
@@ -72,12 +72,11 @@ pub struct SimulationParameters {
 #[pyclass]
 #[derive(Clone)]
 pub struct Simulation {
+    node_cycles: Vec<ClockCycle>,
     #[pyo3(get)]
     top_module: SimulatedModule,
-    #[pyo3(get)]
-    fifo_io: FxHashMap<Fifo, FifoIo>,
-    #[pyo3(get)]
-    axi_io: FxHashMap<AxiInterface, AxiInterfaceIo>,
+    fifo_nodes: Arc<FxHashMap<Fifo, FifoIoNodes>>,
+    axi_interface_nodes: Arc<FxHashMap<AxiInterface, AxiInterfaceIoNodes>>,
 }
 
 #[pyclass]
@@ -184,20 +183,11 @@ impl CompiledSimulation {
             &self.top_module,
             parameters.ap_ctrl_chain_top_port_count.into(),
         );
-        let fifo_io = self
-            .fifo_nodes
-            .iter()
-            .map(|(fifo, nodes)| (*fifo, FifoIo::new(nodes, &node_cycles)))
-            .collect();
-        let axi_io = self
-            .axi_interface_nodes
-            .iter()
-            .map(|(interface, nodes)| (*interface, AxiInterfaceIo::new(nodes, &node_cycles)))
-            .collect();
         Ok(Simulation {
+            node_cycles,
             top_module,
-            fifo_io,
-            axi_io,
+            fifo_nodes: self.fifo_nodes.clone(),
+            axi_interface_nodes: self.axi_interface_nodes.clone(),
         })
     }
 
@@ -208,12 +198,24 @@ impl CompiledSimulation {
     fn edge_count(&self) -> usize {
         self.graph.edges.len()
     }
+}
 
-    fn __repr__(&self) -> String {
-        format!(
-            "CompiledSimulation(graph={:?}, end_node={:?})",
-            self.graph, self.end_node
-        )
+#[pymethods]
+impl Simulation {
+    #[getter]
+    fn fifo_io(&self) -> FxHashMap<Fifo, FifoIo> {
+        self.fifo_nodes
+            .iter()
+            .map(|(fifo, nodes)| (*fifo, FifoIo::new(nodes, &self.node_cycles)))
+            .collect()
+    }
+
+    #[getter]
+    fn axi_io(&self) -> FxHashMap<AxiInterface, AxiInterfaceIo> {
+        self.axi_interface_nodes
+            .iter()
+            .map(|(interface, nodes)| (*interface, AxiInterfaceIo::new(nodes, &self.node_cycles)))
+            .collect()
     }
 }
 
@@ -250,11 +252,14 @@ impl fmt::Debug for SimulationGraph {
 }
 
 impl SimulationParameters {
-    pub(crate) fn get_fifo_depth(&self, fifo: Fifo) -> Result<Option<usize>, SimulationError> {
-        self.fifo_depths
+    pub(crate) fn get_fifo_config(
+        &self,
+        fifo: Fifo,
+    ) -> Result<Option<&FifoConfig>, SimulationError> {
+        self.fifo_configs
             .get(&fifo.id)
-            .copied()
-            .ok_or(SimulationError::FifoDepthNotProvided(fifo.id))
+            .map(Option::as_ref)
+            .ok_or(SimulationError::FifoConfigNotProvided(fifo.id))
     }
 
     pub(crate) fn get_axi_delay(
@@ -331,8 +336,8 @@ impl fmt::Display for SimulationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DeadlockDetected => write!(f, "deadlock detected"),
-            Self::FifoDepthNotProvided(fifo_id) => {
-                write!(f, "no depth provided for FIFO with id {}", fifo_id)
+            Self::FifoConfigNotProvided(fifo_id) => {
+                write!(f, "no config provided for FIFO with id {}", fifo_id)
             }
             Self::AxiDelayNotProvided(interface_address) => write!(
                 f,

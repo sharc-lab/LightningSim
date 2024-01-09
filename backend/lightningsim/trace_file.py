@@ -285,9 +285,15 @@ class ResolvedTrace:
 
 @dataclass(slots=True)
 class SimulationParameters:
-    fifo_depths: Mapping[int, int | None]
+    fifo_configs: Mapping[int, "FifoConfig | None"]
     axi_delays: Mapping[int, int]
     ap_ctrl_chain_top_port_count: int | None
+
+
+@dataclass(slots=True)
+class FifoConfig:
+    width: int
+    depth: int
 
 
 @dataclass(slots=True)
@@ -314,6 +320,7 @@ async def resolve_trace(
     trace_iter = iter(enumerate(trace))
     i: int = 0
     ap_ctrl_chain_top_port_count: int | None = None
+    fifo_widths: Dict[int, int] = {}
 
     def do_sync_work_batch(deadline=SYNC_WORK_BATCH_DURATION):
         nonlocal i, ap_ctrl_chain_top_port_count
@@ -383,6 +390,14 @@ async def resolve_trace(
                         )
                     elif entry.type == "fifo_write":
                         assert isinstance(entry.metadata, FIFOIOMetadata)
+                        if entry.metadata.fifo.id not in fifo_widths:
+                            payload = event_instruction.operands[-1]
+                            assert payload is not None
+                            source_instruction = payload.source
+                            assert isinstance(source_instruction, Instruction)
+                            fifo_widths[entry.metadata.fifo.id] = (
+                                source_instruction.bitwidth
+                            )
                         builder.add_fifo_write(
                             safe_offset,
                             end_stage,
@@ -625,8 +640,9 @@ async def resolve_trace(
     return ResolvedTrace(
         compiled=builder.finish(),
         params=SimulationParameters(
-            fifo_depths={
-                stream.id: depth for stream, depth in trace.channel_depths.items()
+            fifo_configs={
+                stream.id: FifoConfig(width=fifo_widths.get(stream.id, 0), depth=depth)
+                for stream, depth in trace.channel_depths.items()
             },
             axi_delays={
                 interface.address: latency

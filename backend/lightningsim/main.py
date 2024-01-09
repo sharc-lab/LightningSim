@@ -117,8 +117,10 @@ class Server:
             return None
         fifos = {}
         for fifo_id, fifo in self.trace.fifos.items():
+            fifo_config = self.trace.params.fifo_configs[fifo_id]
+            assert fifo_config is not None
             fifo_data = {
-                "depth": self.trace.params.fifo_depths[fifo_id],
+                "depth": fifo_config.depth,
                 "observed": (
                     self.simulation_actual.observed_fifo_depths[fifo]
                     if self.simulation_actual is not None
@@ -314,8 +316,8 @@ class Server:
         trace = ResolvedTrace(
             compiled=self.trace.compiled,
             params=SimulationParameters(
-                fifo_depths={
-                    fifo_id: None for fifo_id in self.trace.params.fifo_depths.keys()
+                fifo_configs={
+                    fifo_id: None for fifo_id in self.trace.params.fifo_configs.keys()
                 },
                 axi_delays=self.trace.params.axi_delays,
                 ap_ctrl_chain_top_port_count=self.trace.params.ap_ctrl_chain_top_port_count,
@@ -350,12 +352,12 @@ class Server:
     def on_change_fifos(self, sid, fifos: dict[str, int]):
         if self.trace is None:
             return
-        self.trace.params.fifo_depths = {
-            fifo_id: fifos.get(
-                self.get_fifo_ui_name(fifo), self.trace.params.fifo_depths[fifo_id]
-            )
-            for fifo_id, fifo in self.trace.fifos.items()
-        }
+        for fifo_id, fifo in self.trace.fifos.items():
+            fifo_config = self.trace.params.fifo_configs[fifo_id]
+            assert fifo_config is not None
+            fifo_display_name = self.get_fifo_ui_name(fifo)
+            if fifo_display_name in fifos:
+                fifo_config.depth = fifos[fifo_display_name]
         if self.simulate_actual_task is not None:
             self.simulate_actual_task.cancel()
         self.simulate_actual_task = create_task(self.simulate_actual())

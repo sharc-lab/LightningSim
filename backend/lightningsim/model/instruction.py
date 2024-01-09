@@ -20,6 +20,10 @@ class Instruction:
         return self.xml.find("opcode").text or None
 
     @cached_property
+    def bitwidth(self):
+        return int(self.xml.find("Value").find("bitwidth").text)
+
+    @cached_property
     def operands(self):
         return [
             self.parent.edges.get(int(operand.text))

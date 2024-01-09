@@ -8,7 +8,7 @@ mod module_builder;
 mod node;
 mod tee;
 
-use std::{collections::hash_map::Entry, mem};
+use std::{collections::hash_map::Entry, mem, sync::Arc};
 
 use axi_builder::{
     AxiBuilder, AxiRequestRange, InsertedAxiRead, InsertedAxiReadReq, InsertedAxiWrite,
@@ -685,12 +685,12 @@ impl TryFrom<SimulationComponentBuilders> for CompiledSimulation {
         Ok(CompiledSimulation {
             graph: value.edges.try_into()?,
             top_module: value.modules.try_into()?,
-            fifo_nodes: value
+            fifo_nodes: Arc::new(value
                 .fifos
                 .into_iter()
                 .map(|(fifo, builder)| builder.try_into().map(|nodes: FifoIoNodes| (fifo, nodes)))
-                .collect::<Result<_, _>>()?,
-            axi_interface_nodes: value
+                .collect::<Result<_, _>>()?),
+            axi_interface_nodes: Arc::new(value
                 .axi
                 .into_iter()
                 .map(|(axi_interface, builder)| {
@@ -698,7 +698,7 @@ impl TryFrom<SimulationComponentBuilders> for CompiledSimulation {
                         .try_into()
                         .map(|nodes: AxiInterfaceIoNodes| (axi_interface, nodes))
                 })
-                .collect::<Result<_, _>>()?,
+                .collect::<Result<_, _>>()?),
             end_node: value
                 .end_node
                 .ok_or_else(|| PyValueError::new_err("incomplete trace"))?,
