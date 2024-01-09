@@ -83,12 +83,6 @@ namespace {
                         EB_builder.CreateCall(fputs_func, {trace_line_endloop});
                     }
                 }
-            }else{
-                for (BasicBlock *BB : L->blocks()) {
-                    //remove the hlslitesim_fputs call
-                    Instruction *FirstInstrPt = &BB->front();
-                    FirstInstrPt->dropUnknownNonDebugMetadata()  //this will drop the bb_id metadata
-                }
             }
             if(modified)
                 return true;
