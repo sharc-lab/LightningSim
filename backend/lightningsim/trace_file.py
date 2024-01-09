@@ -512,9 +512,6 @@ async def resolve_trace(
                         ii = current_loop.blocks[0].basic_block.pipeline.ii
                         current_loop.ii = ii  # type: ignore
                         last_block_overlap -= ii  # type: ignore
-                        ii = current_loop.blocks[0].basic_block.pipeline.ii
-                        current_loop.ii = ii  # type: ignore
-                        last_block_overlap -= ii  # type: ignore
                     else:
                         current_loop.ii = loop_overlap_length + 1
                         last_block_overlap = -1
