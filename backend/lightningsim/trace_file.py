@@ -330,11 +330,14 @@ async def resolve_trace(
             current_loop = frame.current_loop
 
             if entry.type == "end_loop":
+                assert current_loop is not None
+                frame.blocks_seen.clear()
+                for block in current_loop.blocks:
+                    frame.blocks_seen.add(block.basic_block)
                 frame.current_block = None
                 frame.current_loop = None
                 frame.loop_idx = 0
 
-                assert current_loop is not None
                 frame.static_stage = current_loop.blocks[-1].basic_block.end
                 frame.dynamic_stage = current_loop.end_stage
                 if frame.dynamic_stage >= frame.latest_dynamic_stage:
@@ -496,23 +499,21 @@ async def resolve_trace(
                 if entry.type == "loop":
                     assert isinstance(entry.metadata, LoopMetadata)
                     current_loop = UnresolvedLoop(
-                        entry.metadata.name, entry.metadata.tripcount, 0, [], [],  None, frame.dynamic_stage
+                        entry.metadata.name, entry.metadata.tripcount, 0, [], [],  None, None  # type: ignore
                     )
                     frame = stack[-1]
                     frame.current_loop = current_loop
                 elif entry.type == "end_loop_blocks":
                     assert current_loop is not None
-                    loop_overlap_length = 0
+                    loop_overlap_length = current_loop.blocks[-1].basic_block.end-current_loop.blocks[0].basic_block.start
                     if current_loop.blocks[0].basic_block.pipeline is not None:
-                        ii = current_loop.blocks[0].basic_block.pipeline.ii
-                        assert ii is not None
-                        loop_overlap_length = current_loop.blocks[-1].basic_block.end-current_loop.blocks[0].basic_block.start-ii
                         current_loop = replace(current_loop, ii=current_loop.blocks[0].basic_block.pipeline.ii)
-                    if loop_overlap_length < 0:
-                        loop_overlap_length = 0
-                    frame.loop_idx = 0
-                    loop_end_stage = (loop_overlap_length)+current_loop.ii*(current_loop.tripcount)
+                    else:
+                        current_loop = replace(current_loop, ii=loop_overlap_length+1)
+                    loop_end_stage = current_loop.start_stage+ (loop_overlap_length)+current_loop.ii*(current_loop.tripcount-1)
                     frame.current_loop = replace(current_loop, end_stage= loop_end_stage)
+                    frame.loop_idx = 0
+
                     for resolved_block in current_loop.blocks:
                         if len(resolved_block.basic_block.events) >0:
                             frame.current_block = resolved_block
@@ -594,6 +595,7 @@ async def resolve_trace(
                         current_resolved_block = ResolvedBlock(
                             basic_block, 0, frame.dynamic_stage, frame.dynamic_stage - basic_block.length
                         )
+
                         frame.current_block = current_resolved_block
 
                         if not basic_block.events:
@@ -613,6 +615,8 @@ async def resolve_trace(
                                     return True
                     elif entry.type == "loop_bb":
                         assert current_loop is not None
+                        if current_loop.start_stage is None: #this is setting the dynamic start stage of the loop to the dynamic start stage of this loop_bb (only on the first one)
+                            current_loop = replace(current_loop, start_stage=frame.dynamic_stage - basic_block.length)
                         resolved_block = ResolvedBlock(
                             basic_block, 0, frame.dynamic_stage, frame.dynamic_stage - basic_block.length
                         )
