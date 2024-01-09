@@ -268,8 +268,9 @@ class UnresolvedLoop:
     ii: int
     blocks: List[ResolvedBlock]
     events: List[ResolvedEvent]
-    end_stage: int
-    start_stage: int
+    start_stage: int | None = None
+    end_stage: int = 0
+    latest_end_stage: int = 0
 
     def __repr__(self):
         return f"<ResolvedLoop {self.name} in {self.blocks[0].basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {self.tripcount} interations>"
@@ -333,15 +334,16 @@ async def resolve_trace(
                 assert current_loop is not None
                 frame.blocks_seen.clear()
                 frame.blocks_seen.add(current_loop.blocks[0].basic_block)
+                frame.blocks_seen.add(current_loop.blocks[0].basic_block)
                 frame.current_block = None
                 frame.current_loop = None
                 frame.loop_idx = 0
 
                 frame.static_stage = current_loop.blocks[0].basic_block.end
                 frame.dynamic_stage = current_loop.end_stage
-                if frame.dynamic_stage >= frame.latest_dynamic_stage:
-                    frame.latest_dynamic_stage = frame.dynamic_stage
-                    frame.latest_static_stage = frame.static_stage
+                if current_loop.latest_end_stage >= frame.latest_dynamic_stage:
+                    frame.latest_dynamic_stage = current_loop.latest_end_stage
+                    frame.latest_static_stage = current_loop.blocks[-1].basic_block.end
                 continue
 
             current_resolved_block = stack[-1].current_block
@@ -498,7 +500,7 @@ async def resolve_trace(
                 if entry.type == "loop":
                     assert isinstance(entry.metadata, LoopMetadata)
                     current_loop = UnresolvedLoop(
-                        entry.metadata.name, entry.metadata.tripcount, 0, [], [],  None, None  # type: ignore
+                        entry.metadata.name, entry.metadata.tripcount, 0, [], []
                     )
                     frame = stack[-1]
                     frame.current_loop = current_loop
@@ -510,16 +512,28 @@ async def resolve_trace(
                         ii = current_loop.blocks[0].basic_block.pipeline.ii
                         current_loop.ii = ii  # type: ignore
                         last_block_overlap -= ii  # type: ignore
+                        ii = current_loop.blocks[0].basic_block.pipeline.ii
+                        current_loop.ii = ii  # type: ignore
+                        last_block_overlap -= ii  # type: ignore
                     else:
                         current_loop.ii = loop_overlap_length + 1
                         last_block_overlap = -1
 
-                    current_loop.end_stage = (
+                    assert current_loop.start_stage is not None
+                    assert current_loop.ii is not None
+                    loop_end_before_last_block = (
                         current_loop.start_stage
                         + loop_overlap_length
-                        + current_loop.ii * (current_loop.tripcount - 1)  # type: ignore
+                        + current_loop.ii * (current_loop.tripcount - 1)
+                    )
+                    current_loop.end_stage = (
+                        loop_end_before_last_block
                         + current_loop.blocks[0].basic_block.length
                         - last_block_overlap
+                    )
+                    current_loop.latest_end_stage = max(
+                        loop_end_before_last_block,
+                        current_loop.end_stage,
                     )
                     frame.loop_idx = 0
 
