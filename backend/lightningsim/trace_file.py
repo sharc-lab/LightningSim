@@ -639,12 +639,11 @@ async def resolve_trace(
                     elif entry.type == "loop_bb":
                         assert current_loop is not None
                         if current_loop.start_stage is None: #this is setting the dynamic start stage of the loop to the dynamic start stage of this loop_bb (only on the first one)
-                            current_loop = replace(current_loop, start_stage=frame.dynamic_stage - basic_block.length)
+                            current_loop.start_stage = frame.dynamic_stage - basic_block.length
                         resolved_block = ResolvedBlock(
                             basic_block, 0, frame.dynamic_stage, frame.dynamic_stage - basic_block.length
                         )
                         current_loop.blocks.append(resolved_block)
-                    
 
             if time() - start_time >= deadline:
                 return False
