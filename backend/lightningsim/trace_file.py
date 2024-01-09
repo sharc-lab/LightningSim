@@ -262,7 +262,7 @@ class ResolvedBlock:
     def __repr__(self):
         return f"<ResolvedBlock {self.basic_block.name} in {self.basic_block.parent.name}: {self.start_stage}-{self.end_stage} with {len(self.events)} event(s)>"
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class UnresolvedLoop:
     name : str
     tripcount : int
@@ -338,13 +338,12 @@ async def resolve_trace(
                 frame.resolved_trace.append(resolved_block)
 
                 frame.blocks_seen.clear()
-                for block in frame.current_loop.blocks:
-                    frame.blocks_seen.add(block.basic_block)
+                frame.blocks_seen.add(current_loop.blocks[0].basic_block)
                 frame.current_block = None
                 frame.current_loop = None
                 frame.loop_idx = 0
 
-                frame.static_stage = current_loop.blocks[-1].basic_block.end
+                frame.static_stage = current_loop.blocks[0].basic_block.end
                 frame.dynamic_stage = current_loop.end_stage
                 if frame.dynamic_stage >= frame.latest_dynamic_stage:
                     frame.latest_dynamic_stage = frame.dynamic_stage
@@ -429,13 +428,24 @@ async def resolve_trace(
                     frame.current_loop = current_loop
                 elif entry.type == "end_loop_blocks":
                     frame = stack[-1]
-                    loop_overlap_length = current_loop.blocks[-1].basic_block.end-current_loop.blocks[0].basic_block.start
+                    assert current_loop is not None
+                    loop_overlap_length = current_loop.blocks[-1].basic_block.end - current_loop.blocks[0].basic_block.start
+                    last_block_overlap = loop_overlap_length
                     if current_loop.blocks[0].basic_block.pipeline is not None:
-                        current_loop = replace(current_loop, ii=current_loop.blocks[0].basic_block.pipeline.ii)
+                        ii = current_loop.blocks[0].basic_block.pipeline.ii
+                        current_loop.ii = ii  # type: ignore
+                        last_block_overlap -= ii  # type: ignore
                     else:
-                       current_loop = replace(current_loop, ii=loop_overlap_length+1)
-                    loop_end_stage = current_loop.start_stage+ (loop_overlap_length)+current_loop.ii*(current_loop.tripcount-1)
-                    frame.current_loop = replace(current_loop, end_stage= loop_end_stage)
+                        current_loop.ii = loop_overlap_length + 1
+                        last_block_overlap = -1
+
+                    current_loop.end_stage = (
+                        current_loop.start_stage
+                        + loop_overlap_length
+                        + current_loop.ii * (current_loop.tripcount - 1)  # type: ignore
+                        + current_loop.blocks[0].basic_block.length
+                        - last_block_overlap
+                    )
                     frame.loop_idx = 0
 
                     for resolved_block in current_loop.blocks:
