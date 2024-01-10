@@ -1,5 +1,6 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -12,6 +13,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 using namespace std;
@@ -243,6 +245,48 @@ namespace {
         }
     };
 
+    // Based on PromoteLegacyPass (i.e., mem2reg) from lib/Transforms/Utils/Mem2Reg.cpp
+    // but only promotes the induction variable in loops. We also restrict it to only
+    // the simple single-successor loops processed by the FixedLoopAnalysisPass.
+    struct PromoteIndVarPass : public LoopPass {
+        static char ID;
+
+        PromoteIndVarPass() : LoopPass(ID) {}
+
+        bool runOnLoop(Loop *L, LPPassManager &LPM) override {
+            if (!isSingleSuccessorLoop(L)) return false;
+
+            BasicBlock *Header = L->getHeader();
+            Function *F = Header->getParent();
+            if (!F) return false;
+
+            DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+            AssumptionCache &AC =
+                getAnalysis<AssumptionCacheTracker>().getAssumptionCache(*F);
+
+            Instruction *FirstInst = Header->getFirstNonPHIOrDbg();
+            LoadInst *LI = dyn_cast<LoadInst>(FirstInst);
+            if (!LI) return false;
+
+            AllocaInst *AI = dyn_cast<AllocaInst>(LI->getPointerOperand());
+            if (!AI || !isAllocaPromotable(AI)) return false;
+
+            PromoteMemToReg({AI}, DT, &AC);
+            return true;
+        }
+
+        void getAnalysisUsage(AnalysisUsage &AU) const override {
+            AU.addRequired<AssumptionCacheTracker>();
+            AU.addRequired<DominatorTreeWrapperPass>();
+            AU.setPreservesCFG();
+        }
+
+    private:
+        bool isSingleSuccessorLoop(Loop* L) {
+            return L->getNumBackEdges() == 1 && L->getNumBlocks() == 2;
+        }
+    };
+
     struct HLSLiteSimPassManager : public ModulePass {
         static char ID;
 
@@ -250,9 +294,9 @@ namespace {
 
         bool runOnModule(Module &M) override {
             legacy::PassManager PM;
+            PM.add(new PromoteIndVarPass());
             PM.add(new BBTracePass());
             PM.add(new FixLoopMDPass());
-            PM.add(createPromoteMemoryToRegisterPass());
             PM.add(new FixedLoopAnalysisPass());
             return PM.run(M);
         }
@@ -262,5 +306,6 @@ namespace {
 char BBTracePass::ID = 0;
 char FixLoopMDPass::ID = 0;
 char FixedLoopAnalysisPass::ID = 0;
+char PromoteIndVarPass::ID = 0;
 char HLSLiteSimPassManager::ID = 0;
 static RegisterPass<HLSLiteSimPassManager> X("hlslitesim", "HLSLiteSim Pass");
