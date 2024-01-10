@@ -11,8 +11,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/Transforms/Utils.h"
-
-
+#include "llvm/Transforms/Utils/LoopUtils.h"
 
 using namespace llvm;
 using namespace std;
@@ -42,7 +41,7 @@ namespace {
             bool modified = false;
             if(!isSingleSuccessorLoop(L)){ return modified; }
 
-            if(int tc = getTCFromMD(L)){
+            if(int tc = getConstantTripCount(L)){
                 if(BasicBlock* PH = L->getLoopPreheader()){
                     IRBuilder<> builder(PH, PH->getFirstInsertionPt());
                     //move insert point after fputs for preheader trace_bb
@@ -56,8 +55,11 @@ namespace {
                     modified = true;
                     //add each block in the loop to the loop
                     for (BasicBlock *BB : L->blocks()) {
+                        Instruction *FirstInst = BB->getFirstNonPHIOrDbg();
+                        if (!FirstInst) { continue; }
+
                         //get block number and log it in the preheader
-                        int bb_id = getBlockNumMD(BB);
+                        int bb_id = getBlockNumMD(FirstInst);
                         SmallVector<char> trace_line_buf_2;
                         StringRef trace_line_str_bb = ("loop_bb\t" +  BB->getParent()->getName() + "\t" + Twine(bb_id) + "\n").toStringRef(trace_line_buf_2);
                         Value* trace_line_bb = builder.CreateGlobalStringPtr(trace_line_str_bb);
@@ -66,7 +68,6 @@ namespace {
                         builder.SetInsertPoint(InsertPoint);
 
                         //remove the hlslitesim_fputs call
-                        Instruction *FirstInst = &*(BB->getFirstNonPHIOrDbg());
                         FirstInst->eraseFromParent();
                     }
                     
@@ -84,13 +85,15 @@ namespace {
                     }
                 }
             }
-            if(modified)
-                return true;
-            return false;
+            return modified;
         }
 
         StringRef getPassName() const override {
             return "HLSLiteSim Fixed Loop Iteration Trace Pass";
+        }
+
+        void getAnalysisUsage(AnalysisUsage &AU) const override {
+            getLoopAnalysisUsage(AU);
         }
 
     private:
@@ -103,33 +106,13 @@ namespace {
             }
             return true;
         }
+
         bool isSingleSuccessorLoop(Loop* L) {
             return L->getNumBackEdges() == 1 && L->getNumBlocks() == 2;
         }
-        int getTCFromMD(Loop* L){
-            MDNode *LoopID = L->getLoopID();
-            if (!LoopID) return 0; 
 
-            for (auto OpIt = LoopID->op_end(); OpIt != LoopID->op_begin();) {  //reverse search since its most likely the last operand
-                --OpIt;
-                MDNode *Operand = dyn_cast<MDNode>(*OpIt);
-                if (Operand && Operand->getNumOperands() == 2) {
-                    if (MDString *Key = dyn_cast<MDString>(Operand->getOperand(0))) {
-                        if (Key->getString() == "ssdm_op_tripcount") {
-                            if (ConstantAsMetadata *ValueMD = dyn_cast<ConstantAsMetadata>(Operand->getOperand(1))) {
-                                if (ConstantInt *Value = dyn_cast<ConstantInt>(ValueMD->getValue())) {
-                                    return Value->getSExtValue();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            return 0; 
-        }
-        int getBlockNumMD(BasicBlock* BB){
-            Metadata *MD = BB->front().getMetadata("bb_id");
+        int getBlockNumMD(Instruction* Inst){
+            Metadata *MD = Inst->getMetadata("bb_id");
             if(!MD){ return 0; }
             MDNode *MD_Node = dyn_cast<MDNode>(MD);
             if (MD_Node && MD_Node->getOperand(1)) {
@@ -142,8 +125,19 @@ namespace {
             return 0; // Default value if metadata not found or not an integer
         }
 
-
-};
+        unsigned int getConstantTripCount(Loop* L) {
+            ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+            BasicBlock *ExitingBlock = L->getExitingBlock();
+            if (!ExitingBlock) {
+                return 0;
+            }
+            unsigned TripCount = SE.getSmallConstantTripCount(L, ExitingBlock);
+            if (!TripCount) {
+                return 0;
+            }
+            return TripCount - 1;
+        }
+    };
 
     struct BBTracePass : public FunctionPass {
         static char ID;
@@ -167,12 +161,9 @@ namespace {
             if (!isTraceable(F)) {
                 return false;
             }
-            llvm::DominatorTree* DT = new llvm::DominatorTree();         
-            DT->recalculate(F);
-            //generate the LoopInfoBase for the current function
-            llvm::LoopInfoBase<llvm::BasicBlock, llvm::Loop>* KLoop = new llvm::LoopInfoBase<llvm::BasicBlock, llvm::Loop>();
-            KLoop->releaseMemory();
-            KLoop->analyze(*DT); 
+
+            LLVMContext &Context = F.getContext();
+            MDString *MDKeyStr = MDString::get(Context, "bb_id");
 
             StringRef func_name = F.getName();
             uint32_t bb_id = 0;
@@ -182,53 +173,16 @@ namespace {
                 StringRef trace_line_str = ("trace_bb\t" + func_name + "\t" + Twine(bb_id) + "\n").toStringRef(trace_line_buf);
                 IRBuilder<> builder(&BB, BB.getFirstInsertionPt());
                 Value* trace_line = builder.CreateGlobalStringPtr(trace_line_str);
-                builder.CreateCall(fputs_func, {trace_line});
+                CallInst *fputs_call = builder.CreateCall(fputs_func, {trace_line});
 
+                // Insert the block number as metadata on the fputs call at key bb_id
+                // Create metadata nodes
+                ConstantAsMetadata *ValueMetadata = ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context), bb_id));
+                Metadata *MDNodeOps[] = {MDKeyStr, ValueMetadata};
+                MDNode *MetadataNode = MDNode::get(Context, MDNodeOps);
+                // Add metadata to the basic block
+                fputs_call->setMetadata("bb_id", MetadataNode);
 
-
-                //if this basic block is in a loop, check if the loop has a constant trip count and set the metadata accordingly
-                Loop *L = KLoop->getLoopFor(&BB);
-                if(L){
-                    
-                    //Insert the block number as metadata on the fputs call at key bb_id
-                    Instruction *InsertPt = &BB.front();
-                    LLVMContext &Context = BB.getContext();
-                    //Create metadata nodes
-                    MDString *KeyString = MDString::get(Context, "bb_id");
-                    ConstantAsMetadata *ValueMetadata = ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Context), bb_id));
-                    Metadata *MDNodeOps[] = {KeyString, ValueMetadata};
-                    MDNode *MetadataNode = MDNode::get(Context, MDNodeOps);
-
-                    // Add metadata to the basic block
-                    InsertPt->setMetadata("bb_id", MetadataNode);
-
-
-                    if(!LoopMDSsdmOpTripCountExists(L)){
-                        for (Instruction &I : BB) {
-                            if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-                                Function *CalledFunction = CI->getCalledFunction();
-                                if (CalledFunction && CalledFunction->getName().equals("_ssdm_op_SpecLoopTripCount")) {
-                                    int64_t constTC;
-                                    if (areAllTCArgsSame(CI, constTC)) {
-                                        uint64_t userProvidedTC = getTCFromLoopMD(L);
-                                        //add the tripcount to the loop metadata
-                                        if(constTC != userProvidedTC){
-                                            //we found a constant trip count that meets our goals. add metadata to the loop
-                                            setMDCorrectTC(L, constTC);
-                                            break; //there wont be 2 ssdm_op_tripcount functions in one basic block
-                                        }else{
-                                            setMDCorrectTC(L, 0); //trip count we got is the user provided one, assume we dont know trip count and set as 0
-                                            break;
-                                        }
-                                    }else{
-                                        setMDCorrectTC(L, 0); //trip count we got is not constant, set as 0
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 bb_id++;
             }
 
@@ -247,102 +201,6 @@ namespace {
             if (F.getName().startswith("_ssdm_op_")) {
                 return false;
             }
-            return true;
-        }
-        bool areAllTCArgsSame(CallInst *CI, int64_t& value) {
-            unsigned numArgs = CI->getNumOperands();
-
-            if (numArgs < 4) // Assuming the first 3 operands are the inputs
-                return false;
-
-            Value* firstArg = CI->getOperand(0);
-            Value* secondArg = CI->getOperand(1);
-            Value* thirdArg = CI->getOperand(2);
-
-            ConstantInt* firstArgConst = dyn_cast<ConstantInt>(firstArg);
-            ConstantInt* secondArgConst = dyn_cast<ConstantInt>(secondArg);
-            ConstantInt* thirdArgConst = dyn_cast<ConstantInt>(thirdArg);
-
-            if (!firstArgConst || !secondArgConst || !thirdArgConst)
-                return false;
-
-            int64_t firstValue = firstArgConst->getSExtValue();
-            if (firstValue != secondArgConst->getSExtValue() || firstValue != thirdArgConst->getSExtValue())
-                return false;
-
-            value = firstValue;
-            return true;
-        }
-
-        uint64_t getTCFromLoopMD(Loop* L){
-            MDNode *LoopID = L->getLoopID();
-            if (!LoopID || LoopID->getNumOperands() < 1) {
-                return false;
-            }
-            for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
-                Metadata *operand = LoopID->getOperand(i);
-                MDNode *MD = dyn_cast<MDNode>(operand);
-                if (MD && MD->getNumOperands() >= 4) {
-                    MDString *MD_2 = dyn_cast<MDString>(MD->getOperand(0).get());
-                    if(MD_2 && MD_2->getString().equals("llvm.loop.tripcount\n")){
-                        ConstantAsMetadata *MD_3 = dyn_cast<ConstantAsMetadata>(MD->getOperand(1).get());
-                        ConstantAsMetadata *MD_4 = dyn_cast<ConstantAsMetadata>(MD->getOperand(2).get());
-                        ConstantAsMetadata *MD_5 = dyn_cast<ConstantAsMetadata>(MD->getOperand(3).get());
-                        if(MD_3 && MD_4 && MD_5 && MD_3 == MD_4 && MD_3 == MD_5){
-                            ConstantInt *tripCnt = dyn_cast<ConstantInt>(MD_3->getValue());    
-                            if(tripCnt){
-                                return *tripCnt->getValue().getRawData();
-                            }
-                        }
-                    }
-                }
-            }
-            return 0;
-        }
-
-        bool LoopMDSsdmOpTripCountExists(Loop* L){
-            MDNode *LoopID = L->getLoopID();
-            if (!LoopID || LoopID->getNumOperands() < 1) {
-                return false;
-            }
-            auto OperandEnd = LoopID->op_end();
-            auto OperandBegin = LoopID->op_begin(); 
-
-            for (auto OpIt = OperandEnd; OpIt != OperandBegin;) {  //reverse search since its most likely the last operand
-                --OpIt;
-                MDNode *MD = dyn_cast<MDNode>(*OpIt);
-                if (MD && MD->getNumOperands() >= 4) {
-                    MDString *MD_2 = dyn_cast<MDString>(MD->getOperand(0).get());
-                    if(MD_2 && MD_2->getString().equals("ssdm_op_tripcount")){
-                        return true;
-                    }
-                    
-                }
-            }
-            return false;
-        }
-
-        bool setMDCorrectTC(Loop *L, int constTC) {
-            MDNode* LoopID = L->getLoopID();
-            if (!LoopID) return false; // Handle if LoopID doesn't exist
-
-            TempMDTuple Temp = MDNode::getTemporary(LoopID->getContext(), None);
-            SmallVector<Metadata*> Args({ Temp.get() });
-            for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
-                Metadata *operand = LoopID->getOperand(i);
-                Args.push_back(operand);
-            }
-
-            // Create metadata nodes
-            MDString *KeyString = MDString::get(LoopID->getContext(), "ssdm_op_tripcount");
-            ConstantAsMetadata *ValueMetadata = ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(LoopID->getContext()), constTC));
-            Metadata *MDNodeOps[] = {KeyString, ValueMetadata};
-            MDNode *MetadataNode = MDNode::get(LoopID->getContext(), MDNodeOps);
-            Args.push_back(MetadataNode);
-
-            LoopID = MDNode::get(LoopID->getContext(), Args);
-            LoopID->replaceOperandWith(0, LoopID);
-            L->setLoopID(LoopID);
             return true;
         }
     };
@@ -394,6 +252,7 @@ namespace {
             legacy::PassManager PM;
             PM.add(new BBTracePass());
             PM.add(new FixLoopMDPass());
+            PM.add(createPromoteMemoryToRegisterPass());
             PM.add(new FixedLoopAnalysisPass());
             return PM.run(M);
         }
