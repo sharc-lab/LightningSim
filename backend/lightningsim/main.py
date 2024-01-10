@@ -299,7 +299,7 @@ class Server:
         self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL].reset()
         try:
             with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL]:
-                self.simulation_actual = simulate(self.trace)
+                self.simulation_actual = await simulate(self.trace)
         except Exception:
             self.simulation_actual = None
             return False
@@ -327,7 +327,7 @@ class Server:
         )
         try:
             with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL] as step:
-                self.simulation_optimal = simulate(trace)
+                self.simulation_optimal = await simulate(trace)
         except Exception:
             self.simulation_optimal = None
             return False

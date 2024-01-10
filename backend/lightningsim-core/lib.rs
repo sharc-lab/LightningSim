@@ -176,19 +176,36 @@ impl CompiledSimulation {
 
 #[pymethods]
 impl CompiledSimulation {
-    fn execute(&self, parameters: SimulationParameters) -> PyResult<Simulation> {
-        let node_cycles = self.resolve(&parameters)?;
-        let top_module = SimulatedModule::new(
-            &node_cycles,
-            &self.top_module,
-            parameters.ap_ctrl_chain_top_port_count.into(),
-        );
-        Ok(Simulation {
-            node_cycles,
-            top_module,
-            fifo_nodes: self.fifo_nodes.clone(),
-            axi_interface_nodes: self.axi_interface_nodes.clone(),
+    fn execute(&self, py: Python<'_>, parameters: SimulationParameters) -> PyResult<Simulation> {
+        py.allow_threads(|| {
+            let node_cycles = self.resolve(&parameters)?;
+            let top_module = SimulatedModule::new(
+                &node_cycles,
+                &self.top_module,
+                parameters.ap_ctrl_chain_top_port_count.into(),
+            );
+            Ok(Simulation {
+                node_cycles,
+                top_module,
+                fifo_nodes: self.fifo_nodes.clone(),
+                axi_interface_nodes: self.axi_interface_nodes.clone(),
+            })
         })
+    }
+
+    fn get_fifo_design_space(&self, fifo_id: FifoId, width: u32) -> PyResult<Vec<u32>> {
+        let fifo_io = self
+            .fifo_nodes
+            .get(&Fifo { id: fifo_id })
+            .ok_or_else(|| PyValueError::new_err(format!("no FIFO with id {}", fifo_id)))?;
+        Ok(
+            FifoConfig::get_design_space(
+                width,
+                fifo_io.writes.len().try_into().unwrap_or(u32::MAX),
+            )
+            .map(|config| config.depth)
+            .collect(),
+        )
     }
 
     fn node_count(&self) -> usize {

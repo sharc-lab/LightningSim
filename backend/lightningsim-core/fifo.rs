@@ -60,12 +60,6 @@ pub struct FifoIo {
 
 impl FifoConfig {
     pub fn r#type(&self) -> FifoType {
-        // TODO: this is only valid for Zynq UltraScale devices; should pass in
-        // a flag in simulation config:
-        // Vitis HLS automatically implements FIFOs as shift registers if they total
-        // 1024 bits or less.
-        // if self.width * self.depth <= 1024 {
-
         if self.depth <= 2 {
             FifoType::ShiftRegister
         } else {
@@ -120,25 +114,18 @@ impl FifoConfig {
         }
     }
 
-    pub fn max_depth_for_shift_register(width: u32) -> u32 {
-        1024 / cmp::max(width, 1)
-    }
-
-    pub fn get_design_space(width: u32, write_count: u32) -> Box<[Self]> {
-        let max_depth = cmp::max(write_count, 2);
+    pub fn get_design_space(width: u32, write_count: u32) -> impl Iterator<Item = Self> {
+        let initial_depth = 2;
+        let max_depth = cmp::max(write_count, initial_depth);
         let max_bram_count = FifoConfig {
             width,
             depth: max_depth,
         }
         .bram_count();
 
-        let initial_depth = cmp::min(
-            cmp::max(FifoConfig::max_depth_for_shift_register(width), 2),
-            max_depth,
-        );
-        let remaining_1 = (initial_depth..max_depth)
+        let remaining_1 = (1024..max_depth)
             .step_by(1024)
-            .map(|depth| FifoConfig { width, depth });
+            .map(move |depth| FifoConfig { width, depth });
         let remaining_2 = remaining_1.clone();
 
         iter::once(FifoConfig {
@@ -146,7 +133,7 @@ impl FifoConfig {
             depth: initial_depth,
         })
         .chain(remaining_1)
-        .take_while(|config| config.bram_count() != max_bram_count)
+        .take_while(move |config| config.bram_count() != max_bram_count)
         .zip(remaining_2)
         .filter_map(|(config_1, config_2)| {
             (config_1.bram_count() != config_2.bram_count()).then_some(config_1)
@@ -155,7 +142,6 @@ impl FifoConfig {
             width,
             depth: max_depth,
         }))
-        .collect()
     }
 }
 

@@ -106,7 +106,7 @@ async def run_benchmark(benchmark: Path):
             log("Starting LightningSim simulation (parallel with HLS)...")
             parallel_start_time = time()
             trace = await runner.run()
-            simulation = simulate(trace)
+            simulation = trace.compiled.execute(trace.params)
             parallel_end_time = time()
             trace_gen_end_time = runner.steps[RunnerStep.RUNNING_TESTBENCH].end_time
             assert trace_gen_end_time is not None
@@ -159,7 +159,7 @@ async def run_benchmark(benchmark: Path):
                 )
                 for fifo_id, prev_config in trace.params.fifo_configs.items()
             }
-            simulate(trace)
+            trace.compiled.execute(trace.params)
             ls_inc_end_time = time()
             ls_inc_duration = ls_inc_end_time - ls_inc_start_time
             csv_writer.writerow(("Time", "LS Inc.", ls_inc_duration))
@@ -173,7 +173,7 @@ async def run_benchmark(benchmark: Path):
             runner = Runner(solution)
             ls_full_start_time = time()
             trace = await runner.run()
-            simulate(trace)
+            trace.compiled.execute(trace.params)
             ls_full_end_time = time()
             ls_full_duration = ls_full_end_time - ls_full_start_time
             csv_writer.writerow(("Time", "LS", ls_full_duration))
@@ -189,6 +189,7 @@ async def run_benchmark(benchmark: Path):
                     stderr=True,
                 )
 
+            hls_start_time = 0.0
             try:
                 vhls_output_data = {}
                 with open(vhls_out_dir / "output.csv") as vhls_output_fp:
@@ -271,9 +272,9 @@ async def run_benchmark(benchmark: Path):
                 csynth_cycles = (
                     csynth_report.getroot()
                     .find("PerformanceEstimates")
-                    .find("SummaryOfOverallLatency")
-                    .find("Worst-caseLatency")
-                    .text
+                    .find("SummaryOfOverallLatency")  # type: ignore
+                    .find("Worst-caseLatency")        # type: ignore
+                    .text                             # type: ignore
                 )
                 if csynth_cycles == "undef":
                     csynth_cycles = "?"
@@ -408,12 +409,12 @@ def main():
     def log(message: str, stderr: bool = False):
         print(f"[{datetime.now()}] {message}", file=sys_stderr if stderr else None)
 
-    def pluralize(count: int, singular: str, plural: str = None):
+    def pluralize(count: int, singular: str, plural: str | None = None):
         if plural is None:
             plural = singular + "s"
         return f"{count} {singular if count == 1 else plural}"
 
-    default_jobs = max(cpu_count() // 2, 1)
+    default_jobs = max((cpu_count() or 1) // 2, 1)
     parser = ArgumentParser()
     parser.add_argument(
         "benchmark_dir",
