@@ -60,9 +60,13 @@ pub struct FifoIo {
 
 impl FifoConfig {
     pub fn r#type(&self) -> FifoType {
+        // TODO: this is only valid for Zynq UltraScale devices; should pass in
+        // a flag in simulation config:
         // Vitis HLS automatically implements FIFOs as shift registers if they total
         // 1024 bits or less.
-        if self.width * self.depth <= 1024 {
+        // if self.width * self.depth <= 1024 {
+
+        if self.depth <= 2 {
             FifoType::ShiftRegister
         } else {
             FifoType::Ram
