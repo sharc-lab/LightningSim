@@ -8,6 +8,7 @@ use std::{cmp, fmt, iter, sync::Arc};
 
 use bitvec::bitvec;
 use pyo3::{exceptions::PyValueError, prelude::*};
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -61,6 +62,7 @@ pub(crate) enum SimulationError {
     DeadlockDetected,
     FifoDepthNotProvided(FifoId),
     AxiDelayNotProvided(AxiAddress),
+    FifoWidthNotProvided(FifoId),
 }
 
 #[derive(Clone, FromPyObject)]
@@ -91,6 +93,15 @@ pub struct SimulatedModule {
     end: ClockCycle,
     #[pyo3(get)]
     submodules: Vec<SimulatedModule>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct DsePoint {
+    #[pyo3(get)]
+    latency: Option<ClockCycle>,
+    #[pyo3(get)]
+    bram_count: usize,
 }
 
 impl CompiledSimulation {
@@ -192,6 +203,48 @@ impl CompiledSimulation {
                 axi_interface_nodes: self.axi_interface_nodes.clone(),
             })
         })
+    }
+
+    fn dse(
+        &self,
+        py: Python<'_>,
+        base_config: SimulationParameters,
+        fifo_widths: FxHashMap<FifoId, u32>,
+        fifo_design_space: Vec<FxHashMap<FifoId, usize>>,
+    ) -> PyResult<Vec<DsePoint>> {
+        Ok(py.allow_threads(|| {
+            fifo_design_space
+                .into_par_iter()
+                .map(|config| -> Result<DsePoint, SimulationError> {
+                    let mut fifo_depths = base_config.fifo_depths.clone();
+                    fifo_depths.extend(config.into_iter().map(|(id, depth)| (id, Some(depth))));
+                    let bram_count = fifo_depths
+                        .iter()
+                        .filter_map(|(fifo_id, depth)| depth.map(|depth| (fifo_id, depth)))
+                        .try_fold(0, |bram_count, (fifo_id, depth)| {
+                            fifo_widths
+                                .get(fifo_id)
+                                .copied()
+                                .ok_or(SimulationError::FifoWidthNotProvided(*fifo_id))
+                                .map(|width| bram_count + fifo::get_bram_count(width, depth))
+                        })?;
+                    let parameters = SimulationParameters {
+                        fifo_depths,
+                        axi_delays: base_config.axi_delays.clone(),
+                        ap_ctrl_chain_top_port_count: base_config.ap_ctrl_chain_top_port_count,
+                    };
+                    let latency = match self.resolve(&parameters) {
+                        Ok(node_cycles) => Ok(Some(self.top_module.end.resolve(&node_cycles))),
+                        Err(SimulationError::DeadlockDetected) => Ok(None),
+                        Err(error) => Err(error),
+                    }?;
+                    Ok(DsePoint {
+                        latency,
+                        bram_count,
+                    })
+                })
+                .collect::<Result<_, _>>()
+        })?)
     }
 
     fn get_fifo_design_space(&self, fifo_ids: Vec<FifoId>, width: u32) -> PyResult<Vec<usize>> {
@@ -359,6 +412,9 @@ impl fmt::Display for SimulationError {
                 "no delay provided for AXI interface with address {:#010x}",
                 interface_address
             ),
+            Self::FifoWidthNotProvided(fifo_id) => {
+                write!(f, "no width provided for FIFO with id {}", fifo_id)
+            }
         }
     }
 }
@@ -398,6 +454,7 @@ fn _core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<CompiledSimulation>()?;
     m.add_class::<Simulation>()?;
     m.add_class::<SimulatedModule>()?;
+    m.add_class::<DsePoint>()?;
     m.add_class::<Fifo>()?;
     m.add_class::<FifoIo>()?;
     m.add_class::<AxiInterface>()?;

@@ -187,7 +187,7 @@ pub fn get_design_space(width: u32, write_count: usize) -> impl Iterator<Item = 
             (bram_count != max_bram_count).then(|| {
                 let next_depth = (depth + 1024) / 1024 * 1024;
                 let next_bram_count = get_bram_count(width, next_depth);
-                (bram_count != next_bram_count).then_some(bram_count)
+                (bram_count != next_bram_count).then_some(depth)
             })
         })
         .flatten()

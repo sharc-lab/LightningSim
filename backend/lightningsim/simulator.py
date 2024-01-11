@@ -1,13 +1,13 @@
 from asyncio import get_running_loop
 from dataclasses import dataclass
 from ._core import SimulatedModule
-from .trace_file import ResolvedTrace, Stream
+from .trace_file import ResolvedTrace
 
 
 @dataclass(slots=True)
 class Simulation:
     top_module: SimulatedModule
-    observed_fifo_depths: dict[Stream, int]
+    observed_fifo_depths: dict[int, int]
 
 
 async def simulate(trace: ResolvedTrace):
@@ -16,7 +16,7 @@ async def simulate(trace: ResolvedTrace):
     return Simulation(
         top_module=simulation.top_module,
         observed_fifo_depths={
-            trace.fifos[fifo.id]: fifo_io.get_observed_depth()
+            fifo.id: fifo_io.get_observed_depth()
             for fifo, fifo_io in simulation.fifo_io.items()
         },
     )

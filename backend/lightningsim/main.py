@@ -15,7 +15,7 @@ from ._core import SimulatedModule
 from .model import Solution
 from .runner import CompletedProcess, Runner, RunnerStep, Step
 from .simulator import Simulation, simulate
-from .trace_file import ResolvedTrace, SimulationParameters, Stream
+from .trace_file import ResolvedStream, ResolvedTrace, SimulationParameters
 
 
 class GlobalStep(Enum):
@@ -116,21 +116,21 @@ class Server:
         if self.trace is None:
             return None
         fifos = {}
-        for fifo_id, fifo in self.trace.fifos.items():
+        for fifo in self.trace.fifos:
             fifo_data = {
-                "depth": self.trace.params.fifo_depths[fifo_id],
+                "depth": self.trace.params.fifo_depths[fifo.id],
                 "observed": (
-                    self.simulation_actual.observed_fifo_depths[fifo]
+                    self.simulation_actual.observed_fifo_depths[fifo.id]
                     if self.simulation_actual is not None
                     else None
                 ),
                 "optimal": (
-                    self.simulation_optimal.observed_fifo_depths[fifo]
+                    self.simulation_optimal.observed_fifo_depths[fifo.id]
                     if self.simulation_optimal is not None
                     else None
                 ),
             }
-            existing_data = fifos.setdefault(self.get_fifo_ui_name(fifo), fifo_data)
+            existing_data = fifos.setdefault(fifo.get_display_name(), fifo_data)
             if fifo_data["depth"] > existing_data["depth"]:
                 existing_data["depth"] = fifo_data["depth"]
             if fifo_data["observed"] is not None and (
@@ -351,17 +351,14 @@ class Server:
         if self.trace is None:
             return
         self.trace.params.fifo_depths = {
-            fifo_id: fifos.get(
-                self.get_fifo_ui_name(fifo), self.trace.params.fifo_depths[fifo_id]
+            fifo.id: fifos.get(
+                fifo.get_display_name(), self.trace.params.fifo_depths[fifo.id]
             )
-            for fifo_id, fifo in self.trace.fifos.items()
+            for fifo in self.trace.fifos
         }
         if self.simulate_actual_task is not None:
             self.simulate_actual_task.cancel()
         self.simulate_actual_task = create_task(self.simulate_actual())
-
-    def get_fifo_ui_name(self, fifo: Stream):
-        return fifo.name.split(".", 1)[0]
 
 
 def main():

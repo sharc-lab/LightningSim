@@ -71,6 +71,9 @@ class ResolvedStream:
     name: str = field(compare=False)
     width: int = field(compare=False)
 
+    def get_display_name(self):
+        return self.name.split(".", 1)[0]
+
 
 @dataclass(frozen=True, slots=True)
 class AXIInterface:
@@ -287,8 +290,8 @@ class UnresolvedLoop:
 class ResolvedTrace:
     compiled: CompiledSimulation
     params: "SimulationParameters"
-    fifos: Dict[int, ResolvedStream]
-    axi_interfaces: Dict[int, AXIInterface]
+    fifos: List[ResolvedStream]
+    axi_interfaces: List[AXIInterface]
 
 
 @dataclass(slots=True)
@@ -673,11 +676,9 @@ async def resolve_trace(
             },
             ap_ctrl_chain_top_port_count=ap_ctrl_chain_top_port_count,
         ),
-        fifos={
-            fifo.id: ResolvedStream(fifo.id, fifo.name, fifo_widths.get(fifo.id, 0))
+        fifos=[
+            ResolvedStream(fifo.id, fifo.name, fifo_widths.get(fifo.id, 0))
             for fifo in trace.channel_depths.keys()
-        },
-        axi_interfaces={
-            interface.address: interface for interface in trace.axi_latencies.keys()
-        },
+        ],
+        axi_interfaces=list(trace.axi_latencies.keys()),
     )
