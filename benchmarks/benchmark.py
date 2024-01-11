@@ -22,7 +22,6 @@ from zipfile import ZipFile
 from lightningsim._core import SimulatedModule
 from lightningsim.model import Function, Solution
 from lightningsim.runner import Runner, RunnerStep
-from lightningsim.trace_file import FifoConfig
 from lightningsim.simulator import simulate
 
 SCRIPT_DIR = Path(__file__).parent
@@ -152,12 +151,9 @@ async def run_benchmark(benchmark: Path):
 
             log("Starting LightningSim incremental simulation...")
             ls_inc_start_time = time()
-            trace.params.fifo_configs = {
-                fifo_id: prev_config and FifoConfig(
-                    width=prev_config.width,
-                    depth=prev_config.depth,
-                )
-                for fifo_id, prev_config in trace.params.fifo_configs.items()
+            trace.params.fifo_depths = {
+                fifo_id: prev_depth
+                for fifo_id, prev_depth in trace.params.fifo_depths.items()
             }
             trace.compiled.execute(trace.params)
             ls_inc_end_time = time()

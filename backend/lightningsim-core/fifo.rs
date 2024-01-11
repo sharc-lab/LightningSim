@@ -21,12 +21,6 @@ pub struct Fifo {
     pub id: FifoId,
 }
 
-#[derive(Clone, Copy, FromPyObject)]
-pub struct FifoConfig {
-    pub width: u32,
-    pub depth: u32,
-}
-
 pub enum FifoType {
     ShiftRegister,
     Ram,
@@ -58,102 +52,16 @@ pub struct FifoIo {
     pub reads: Vec<ClockCycle>,
 }
 
-impl FifoConfig {
-    pub fn r#type(&self) -> FifoType {
-        if self.depth <= 2 {
-            FifoType::ShiftRegister
-        } else {
-            FifoType::Ram
-        }
-    }
-
-    pub fn bram_count(&self) -> u32 {
-        if matches!(self.r#type(), FifoType::Ram) {
-            let mut bram_count = 0;
-            let mut remaining_width = self.width;
-
-            // BRAMs can be configured as 1Kx18...
-            bram_count += (remaining_width / 18) * ((self.depth + 1023) / 1024);
-            remaining_width %= 18;
-            if self.depth <= 1024 {
-                bram_count += u32::from(remaining_width != 0);
-                return bram_count;
-            }
-
-            // ...and/or as 2Kx9...
-            bram_count += (remaining_width / 9) * ((self.depth + 2047) / 2048);
-            remaining_width %= 9;
-            if self.depth <= 2048 {
-                bram_count += u32::from(remaining_width != 0);
-                return bram_count;
-            }
-
-            // (Ad-hoc special case found empirically)
-            if self.depth <= 4096 && self.width > 18 && remaining_width == 3 {
-                bram_count += 2;
-                return bram_count;
-            }
-
-            // ...and/or as 4Kx4...
-            bram_count += (remaining_width / 4) * ((self.depth + 4095) / 4096);
-            remaining_width %= 4;
-            if self.depth <= 4096 {
-                bram_count += u32::from(remaining_width != 0);
-                return bram_count;
-            }
-
-            // ...and/or as 8Kx2...
-            bram_count += (remaining_width / 2) * ((self.depth + 8191) / 8192);
-            remaining_width %= 2;
-
-            // ...and/or as 16Kx1.
-            bram_count += remaining_width * ((self.depth + 16383) / 16384);
-            bram_count
-        } else {
-            0
-        }
-    }
-
-    pub fn get_design_space(width: u32, write_count: u32) -> impl Iterator<Item = Self> {
-        let initial_depth = 2;
-        let max_depth = cmp::max(write_count, initial_depth);
-        let max_bram_count = FifoConfig {
-            width,
-            depth: max_depth,
-        }
-        .bram_count();
-
-        iter::once(FifoConfig {
-            width,
-            depth: initial_depth,
-        })
-        .chain(
-            (1024..max_depth)
-                .step_by(1024)
-                .map(move |depth| FifoConfig { width, depth }),
-        )
-        .map_while(move |config| {
-            let bram_count = config.bram_count();
-            (bram_count != max_bram_count).then(|| {
-                let next_config = FifoConfig {
-                    width: config.width,
-                    depth: (config.depth + 1024) / 1024 * 1024,
-                };
-                (bram_count != next_config.bram_count()).then_some(config)
-            })
-        })
-        .flatten()
-        .chain(iter::once(FifoConfig {
-            width,
-            depth: max_depth,
-        }))
-    }
-}
-
 impl FifoType {
-    pub fn from_config(config: Option<&FifoConfig>) -> Self {
-        match config {
-            Some(config) => config.r#type(),
+    pub fn from_depth(depth: Option<usize>) -> Self {
+        match depth {
+            Some(depth) => {
+                if depth <= 2 {
+                    Self::ShiftRegister
+                } else {
+                    Self::Ram
+                }
+            }
             None => Self::ShiftRegister,
         }
     }
@@ -218,4 +126,70 @@ impl FifoIo {
 
         max_depth
     }
+}
+
+pub fn get_bram_count(width: u32, depth: usize) -> usize {
+    if matches!(FifoType::from_depth(Some(depth)), FifoType::Ram) {
+        let mut bram_count = 0;
+        let mut remaining_width: usize = width.try_into().unwrap();
+
+        // BRAMs can be configured as 1Kx18...
+        bram_count += (remaining_width / 18) * ((depth + 1023) / 1024);
+        remaining_width %= 18;
+        if depth <= 1024 {
+            bram_count += usize::from(remaining_width != 0);
+            return bram_count;
+        }
+
+        // ...and/or as 2Kx9...
+        bram_count += (remaining_width / 9) * ((depth + 2047) / 2048);
+        remaining_width %= 9;
+        if depth <= 2048 {
+            bram_count += usize::from(remaining_width != 0);
+            return bram_count;
+        }
+
+        // (Ad-hoc special case found empirically)
+        if depth <= 4096 && width > 18 && remaining_width == 3 {
+            bram_count += 2;
+            return bram_count;
+        }
+
+        // ...and/or as 4Kx4...
+        bram_count += (remaining_width / 4) * ((depth + 4095) / 4096);
+        remaining_width %= 4;
+        if depth <= 4096 {
+            bram_count += usize::from(remaining_width != 0);
+            return bram_count;
+        }
+
+        // ...and/or as 8Kx2...
+        bram_count += (remaining_width / 2) * ((depth + 8191) / 8192);
+        remaining_width %= 2;
+
+        // ...and/or as 16Kx1.
+        bram_count += remaining_width * ((depth + 16383) / 16384);
+        bram_count
+    } else {
+        0
+    }
+}
+
+pub fn get_design_space(width: u32, write_count: usize) -> impl Iterator<Item = usize> {
+    let initial_depth = 2;
+    let max_depth = cmp::max(write_count, initial_depth);
+    let max_bram_count = get_bram_count(width, max_depth);
+
+    iter::once(initial_depth)
+        .chain((1024..max_depth).step_by(1024))
+        .map_while(move |depth| {
+            let bram_count = get_bram_count(width, depth);
+            (bram_count != max_bram_count).then(|| {
+                let next_depth = (depth + 1024) / 1024 * 1024;
+                let next_bram_count = get_bram_count(width, next_depth);
+                (bram_count != next_bram_count).then_some(bram_count)
+            })
+        })
+        .flatten()
+        .chain(iter::once(max_depth))
 }

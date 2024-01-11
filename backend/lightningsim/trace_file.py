@@ -66,6 +66,13 @@ class Stream:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedStream:
+    id: int
+    name: str = field(compare=False)
+    width: int = field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class AXIInterface:
     address: int
     name: str = field(compare=False)
@@ -280,21 +287,15 @@ class UnresolvedLoop:
 class ResolvedTrace:
     compiled: CompiledSimulation
     params: "SimulationParameters"
-    fifos: Dict[int, Stream]
+    fifos: Dict[int, ResolvedStream]
     axi_interfaces: Dict[int, AXIInterface]
 
 
 @dataclass(slots=True)
 class SimulationParameters:
-    fifo_configs: Mapping[int, "FifoConfig | None"]
+    fifo_depths: Mapping[int, int | None]
     axi_delays: Mapping[int, int]
     ap_ctrl_chain_top_port_count: int | None
-
-
-@dataclass(slots=True)
-class FifoConfig:
-    width: int
-    depth: int
 
 
 @dataclass(slots=True)
@@ -663,9 +664,8 @@ async def resolve_trace(
     return ResolvedTrace(
         compiled=builder.finish(),
         params=SimulationParameters(
-            fifo_configs={
-                stream.id: FifoConfig(width=fifo_widths.get(stream.id, 0), depth=depth)
-                for stream, depth in trace.channel_depths.items()
+            fifo_depths={
+                stream.id: depth for stream, depth in trace.channel_depths.items()
             },
             axi_delays={
                 interface.address: latency
@@ -673,7 +673,10 @@ async def resolve_trace(
             },
             ap_ctrl_chain_top_port_count=ap_ctrl_chain_top_port_count,
         ),
-        fifos={fifo.id: fifo for fifo in trace.channel_depths.keys()},
+        fifos={
+            fifo.id: ResolvedStream(fifo.id, fifo.name, fifo_widths.get(fifo.id, 0))
+            for fifo in trace.channel_depths.keys()
+        },
         axi_interfaces={
             interface.address: interface for interface in trace.axi_latencies.keys()
         },
