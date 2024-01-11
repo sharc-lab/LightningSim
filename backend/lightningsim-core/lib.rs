@@ -315,7 +315,7 @@ impl SimulatedModule {
                 // - write_start (process_num = N + 1), which writes ap_start(?)
                 // Each contributes a cycle to the loop, except update_status, which takes
                 // SAXI_STATUS_UPDATE_OVERHEAD cycles.
-                let num_parameters: ClockCycle = num_parameters.try_into().unwrap();
+                let num_parameters: ClockCycle = num_parameters.into();
                 let saxi_status_read_interval = SAXI_STATUS_UPDATE_OVERHEAD + num_parameters + 1;
 
                 // The first status read occurs at cycle SAXI_STATUS_READ_DELAY after ap_start,

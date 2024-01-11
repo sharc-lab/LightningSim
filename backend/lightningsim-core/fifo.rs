@@ -123,21 +123,26 @@ impl FifoConfig {
         }
         .bram_count();
 
-        let remaining_1 = (1024..max_depth)
-            .step_by(1024)
-            .map(move |depth| FifoConfig { width, depth });
-        let remaining_2 = remaining_1.clone();
-
         iter::once(FifoConfig {
             width,
             depth: initial_depth,
         })
-        .chain(remaining_1)
-        .take_while(move |config| config.bram_count() != max_bram_count)
-        .zip(remaining_2)
-        .filter_map(|(config_1, config_2)| {
-            (config_1.bram_count() != config_2.bram_count()).then_some(config_1)
+        .chain(
+            (1024..max_depth)
+                .step_by(1024)
+                .map(move |depth| FifoConfig { width, depth }),
+        )
+        .map_while(move |config| {
+            let bram_count = config.bram_count();
+            (bram_count != max_bram_count).then(|| {
+                let next_config = FifoConfig {
+                    width: config.width,
+                    depth: (config.depth + 1024) / 1024 * 1024,
+                };
+                (bram_count != next_config.bram_count()).then_some(config)
+            })
         })
+        .flatten()
         .chain(iter::once(FifoConfig {
             width,
             depth: max_depth,
