@@ -556,7 +556,7 @@ class Runner:
                     for file in project_binary_files:
                         shutil.copy2(file.path, output_dir)
                     for directory in project_directories:
-                        os.symlink(directory.path, output_dir / directory.path.name)
+                        os.symlink(directory.path.absolute(), output_dir / directory.path.name)
 
             with self.steps[RunnerStep.RUNNING_TESTBENCH]:
                 trace_reader_fd, trace_writer_fd = os.pipe()
