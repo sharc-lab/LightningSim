@@ -212,29 +212,12 @@ impl TryFrom<EdgeBuilder> for SimulationGraph {
     type Error = PyErr;
 
     fn try_from(value: EdgeBuilder) -> Result<Self, Self::Error> {
-        let edge_iter_1 = value.edges.into_iter();
-        let edge_iter_2 = edge_iter_1.clone();
-        let edges: Box<[Edge]> = edge_iter_1.flatten().collect();
-        let voided_count: Box<[usize]> = edge_iter_2
-            .scan(0, |voided_count, edge| {
-                let current_voided_count = *voided_count;
-                if edge.is_none() {
-                    *voided_count += 1;
-                }
-                Some(current_voided_count)
-            })
-            .collect();
-        let node_offsets = value
-            .node_offsets
-            .into_iter()
-            .map(|offset| offset - voided_count[offset])
-            .collect();
         value
             .incomplete_edges
             .is_empty()
             .then_some(SimulationGraph {
-                node_offsets,
-                edges,
+                node_offsets: value.node_offsets,
+                edges: value.edges,
             })
             .ok_or_else(|| PyValueError::new_err("incomplete edges remain"))
     }

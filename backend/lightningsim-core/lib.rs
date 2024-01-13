@@ -42,8 +42,8 @@ pub struct CompiledSimulation {
 
 #[derive(Clone)]
 pub(crate) struct SimulationGraph {
-    pub node_offsets: Box<[usize]>,
-    pub edges: Box<[Edge]>,
+    pub node_offsets: Vec<usize>,
+    pub edges: Vec<Option<Edge>>,
 }
 
 #[derive(Clone)]
@@ -155,7 +155,12 @@ impl CompiledSimulation {
                 });
 
                 for edge in self.graph.in_edges(node_usize) {
-                    if let Some(edge) = edge.resolve(self, parameters)? {
+                    if let Some(edge) = edge
+                        .as_ref()
+                        .map(|edge| edge.resolve(self, parameters))
+                        .transpose()?
+                        .flatten()
+                    {
                         stack.push(Visit {
                             node: edge.node,
                             parent_visit: visit_index,
@@ -291,7 +296,7 @@ impl Simulation {
 }
 
 impl SimulationGraph {
-    fn in_edges(&self, node: usize) -> &[Edge] {
+    fn in_edges(&self, node: usize) -> &[Option<Edge>] {
         let start = self.node_offsets[node];
         let end = self
             .node_offsets
