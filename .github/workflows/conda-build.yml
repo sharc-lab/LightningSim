@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - v2
     paths-ignore:
       - README.md
       - LICENSE
@@ -12,8 +13,16 @@ jobs:
   conda-build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout repository (v1)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: v1/
+      - name: Checkout repository (v2)
+        uses: actions/checkout@v4
+        with:
+          ref: v2
+          path: v2/
       - name: Setup conda-forge channel
         run: conda config --add channels conda-forge
       - name: Install conda-build and conda-verify
@@ -22,12 +31,12 @@ jobs:
         run: mkdir build
       - name: Set MAKEFLAGS
         run: echo "MAKEFLAGS=-j$(nproc)" >>"$GITHUB_ENV"
-      - name: Build conda package
-        run: $CONDA/bin/conda build --no-anaconda-upload --output-folder build recipe
-      - name: Upload conda package
-        uses: actions/upload-artifact@v3
+      - name: Build conda packages
+        run: $CONDA/bin/conda build --no-anaconda-upload --output-folder build v1/recipe v2/recipe
+      - name: Upload conda packages
+        uses: actions/upload-artifact@v4
         with:
-          name: conda-package
+          name: conda-packages
           path: build/
 
   deploy-github-pages:
@@ -40,15 +49,15 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download conda package
-        uses: actions/download-artifact@v3
+      - name: Download conda packages
+        uses: actions/download-artifact@v4
         with:
-          name: conda-package
+          name: conda-packages
           path: repo/
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4
