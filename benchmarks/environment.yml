@@ -1,8 +1,9 @@
-name: lightningsim-benchmarks
+name: lightningsimv2-benchmarks
 channels:
   - https://sharc-lab.github.io/LightningSim/repo
   - conda-forge
   - defaults
 dependencies:
   - lightningsim
-  - moreutils
+  - lightningsimv2
+  - time

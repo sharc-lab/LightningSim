@@ -1,8 +1,8 @@
 # Build LightningSim LLVM fork
-mkdir -p "$PREFIX/share/lightningsim/llvm"
+mkdir -p "$PREFIX/share/lightningsimv2/llvm"
 mkdir llvm-project/llvm/build
 cmake -S llvm-project/llvm -B llvm-project/llvm/build \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX/share/lightningsim/llvm" \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX/share/lightningsimv2/llvm" \
     -DLLVM_EXTERNAL_CLANG_SOURCE_DIR=llvm-project/clang \
     -DLLVM_TARGETS_TO_BUILD=X86 \
     -DLLVM_ENABLE_PROJECTS=clang \
@@ -15,12 +15,12 @@ cmake --build llvm-project/llvm/build
 cmake --install llvm-project/llvm/build --strip
 
 # Build LightningSim templates
-mkdir -p "$PREFIX/share/lightningsim/templates"
-make DESTDIR="$PREFIX/share/lightningsim/templates"
+mkdir -p "$PREFIX/share/lightningsimv2/templates"
+make DESTDIR="$PREFIX/share/lightningsimv2/templates"
 
 # Build LightningSim frontend
 npm ci --prefix=frontend
-npm run --prefix=frontend build -- --outDir="$PREFIX/share/lightningsim/public" --emptyOutDir
+npm run --prefix=frontend build -- --outDir="$PREFIX/share/lightningsimv2/public" --emptyOutDir
 
 # Install LightningSim
 "$PYTHON" -m pip install --no-deps --ignore-installed ./backend

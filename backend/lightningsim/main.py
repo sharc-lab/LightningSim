@@ -59,7 +59,7 @@ class Server:
         self.app = socketio.ASGIApp(
             self.sio,
             static_files={
-                "/": "/opt/anaconda1anaconda2anaconda3/share/lightningsim/public/",
+                "/": "/opt/anaconda1anaconda2anaconda3/share/lightningsimv2/public/",
             },
         )
         self.config = uvicorn.Config(self.app, host=host, port=port)

@@ -19,10 +19,10 @@ from time import time
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-from lightningsim._core import SimulatedModule
-from lightningsim.model import Function, Solution
-from lightningsim.runner import Runner, RunnerStep
-from lightningsim.simulator import simulate
+from lightningsimv2._core import SimulatedModule
+from lightningsimv2.model import Function, Solution
+from lightningsimv2.runner import Runner, RunnerStep
+from lightningsimv2.simulator import simulate
 
 SCRIPT_DIR = Path(__file__).parent
 
