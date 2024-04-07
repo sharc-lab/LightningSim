@@ -9,20 +9,24 @@ build:
   number: 1
   entry_points:
     - lightningsimv2 = lightningsimv2.main:main
+  script_env:
+    - CCACHE_DIR
 
 requirements:
   build:
     - {{ compiler('cxx') }}
+    - ccache=4
     - clang=15.0.5
     - cmake=3
+    - ninja=1
     - nodejs=18
     - rust=1.75
     - sysroot_{{ target_platform }}=2.17     # [linux]
-    - python=3.12                            # [build_platform != target_platform]
+    - python                                 # [build_platform != target_platform]
     - cross-python_{{ target_platform }}     # [build_platform != target_platform]
 
   host:
-    - python=3.12
+    - python
     - pip
     - setuptools-rust
     - libedit
@@ -32,7 +36,7 @@ requirements:
     - zstd
 
   run:
-    - python=3.12
+    - python
     - jinja2
     - llvmlite
     - pyelftools
