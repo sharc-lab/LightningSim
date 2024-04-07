@@ -29,8 +29,15 @@ jobs:
         run: $CONDA/bin/conda install --yes conda-build conda-verify --name base
       - name: Create output directory
         run: mkdir build
-      - name: Set MAKEFLAGS
-        run: echo "MAKEFLAGS=-j$(nproc)" >>"$GITHUB_ENV"
+      - name: Set CCACHE_DIR
+        run: echo "CCACHE_DIR=$HOME/.ccache" >>"$GITHUB_ENV"
+      - name: Cache CCACHE_DIR
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ github.run_id }}
+          restore-keys: |
+            ccache-
       - name: Build conda packages
         run: $CONDA/bin/conda build --no-anaconda-upload --output-folder build v1/recipe v2/recipe
       - name: Upload conda packages

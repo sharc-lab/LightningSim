@@ -2,7 +2,9 @@
 mkdir -p "$PREFIX/share/lightningsim/llvm"
 mkdir llvm-project/llvm/build
 cmake -S llvm-project/llvm -B llvm-project/llvm/build \
+    -G Ninja \
     -DCMAKE_INSTALL_PREFIX="$PREFIX/share/lightningsim/llvm" \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DLLVM_EXTERNAL_CLANG_SOURCE_DIR=llvm-project/clang \
     -DLLVM_TARGETS_TO_BUILD=X86 \
     -DLLVM_ENABLE_PROJECTS=clang \
