@@ -72,6 +72,8 @@ class ReadTraceResult:
     channel_depths: Dict[Stream, int]
     axi_latencies: Dict[AXIInterface, int]
     is_ap_ctrl_chain: bool
+    line_count: int
+    byte_count: int
 
 
 async def read_trace(reader: StreamReader, solution: Solution):
@@ -83,6 +85,8 @@ async def read_trace(reader: StreamReader, solution: Solution):
     axi_interfaces: List[AXIInterface] = []
     axi_latencies: Dict[AXIInterface, int] = {}
     is_ap_ctrl_chain = False
+    line_count = 0
+    byte_count = 0
 
     # TraceEntry caches to save memory
     trace_bb_cache: Dict[Tuple[str, int], TraceEntry] = {}
@@ -93,6 +97,8 @@ async def read_trace(reader: StreamReader, solution: Solution):
     axi_writeresp_cache: Dict[AXIInterface, TraceEntry] = {}
 
     async for line in reader:
+        line_count += 1
+        byte_count += len(line)
         type, *metadata_list = line.decode(errors="replace").strip().split("\t")
 
         if type == "spec_channel":
@@ -174,6 +180,8 @@ async def read_trace(reader: StreamReader, solution: Solution):
         channel_depths=channel_depths,
         axi_latencies=axi_latencies,
         is_ap_ctrl_chain=is_ap_ctrl_chain,
+        line_count=line_count,
+        byte_count=byte_count,
     )
 
 
@@ -184,6 +192,8 @@ class UnresolvedTrace:
     channel_depths: Dict[Stream, int]
     axi_latencies: Dict[AXIInterface, int]
     is_ap_ctrl_chain: bool
+    line_count: int
+    byte_count: int
 
     def __iter__(self):
         return iter(self.trace)
@@ -208,6 +218,8 @@ async def await_trace_functions(read_trace_result: ReadTraceResult):
         channel_depths=read_trace_result.channel_depths,
         axi_latencies=read_trace_result.axi_latencies,
         is_ap_ctrl_chain=read_trace_result.is_ap_ctrl_chain,
+        line_count=read_trace_result.line_count,
+        byte_count=read_trace_result.byte_count,
     )
 
 
@@ -267,6 +279,8 @@ class ResolvedTrace:
     axi_latencies: Dict[AXIInterface, int]
     is_ap_ctrl_chain: bool
     num_stall_events: int
+    line_count: int
+    byte_count: int
 
     def __iter__(self):
         return iter(self.trace)
@@ -457,4 +471,6 @@ async def resolve_trace(
         axi_latencies=trace.axi_latencies,
         is_ap_ctrl_chain=trace.is_ap_ctrl_chain,
         num_stall_events=num_stall_events,
+        line_count=trace.line_count,
+        byte_count=trace.byte_count,
     )
