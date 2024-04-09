@@ -301,6 +301,8 @@ class Server:
             axi_latencies=self.trace.axi_latencies,
             is_ap_ctrl_chain=self.trace.is_ap_ctrl_chain,
             num_stall_events=self.trace.num_stall_events,
+            line_count=self.trace.line_count,
+            byte_count=self.trace.byte_count,
         )
         try:
             with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL] as step:
