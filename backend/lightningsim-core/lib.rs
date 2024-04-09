@@ -274,6 +274,35 @@ impl CompiledSimulation {
     fn edge_count(&self) -> usize {
         self.graph.edges.len()
     }
+
+    fn deleted_node_count(&self) -> u64 {
+        let mut node_count = 0;
+        let mut stack = vec![&self.top_module];
+        while let Some(module) = stack.pop() {
+            let mut current = module.end + 1;
+            while current.node != module.start.node {
+                node_count += current
+                    .delay
+                    .checked_sub(1)
+                    .expect("delay should always be nonzero here");
+                current = *self
+                    .graph
+                    .in_edges(current.node.try_into().unwrap())
+                    .iter()
+                    .find_map(|edge| match edge {
+                        Some(Edge::ControlFlow(parent)) => Some(parent),
+                        _ => None,
+                    })
+                    .expect("all non-start nodes should have a preceding control flow edge");
+            }
+            node_count += current
+                .delay
+                .checked_sub(module.start.delay)
+                .expect("current should never cross start");
+            stack.extend(module.submodules.iter());
+        }
+        node_count
+    }
 }
 
 #[pymethods]
