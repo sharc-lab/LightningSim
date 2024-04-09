@@ -322,6 +322,8 @@ class Server:
             ),
             fifos=self.trace.fifos,
             axi_interfaces=self.trace.axi_interfaces,
+            line_count=self.trace.line_count,
+            byte_count=self.trace.byte_count,
         )
         try:
             with self.steps[GlobalStep.RUNNING_SIMULATION_OPTIMAL] as step:

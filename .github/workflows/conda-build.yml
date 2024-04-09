@@ -29,8 +29,11 @@ jobs:
         run: $CONDA/bin/conda install --yes conda-build conda-verify --name base
       - name: Create output directory
         run: mkdir build
-      - name: Set CCACHE_DIR
-        run: echo "CCACHE_DIR=$HOME/.ccache" >>"$GITHUB_ENV"
+      - name: Set environment variables
+        run: |
+          echo "CONDA_BLD_PATH=$HOME/conda-bld" >>"$GITHUB_ENV"
+          echo "CCACHE_DIR=$HOME/.ccache" >>"$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=$HOME/conda-bld" >>"$GITHUB_ENV"
       - name: Cache CCACHE_DIR
         uses: actions/cache@v4
         with:
