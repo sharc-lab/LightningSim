@@ -690,7 +690,7 @@ async def run_lightningsimv2_dse_as_child(benchmark: Path, *, logger: Logger):
             break
     else:
         logger.info(
-            log_prefix + f"iterating all {pluralize(DSE_POINTS, 'DSE point')} "
+            log_prefix + f"iterating all {pluralize(num_design_points, 'DSE point')} "
             "in design space"
         )
         design_point_depths = itertools.product(
