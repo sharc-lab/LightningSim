@@ -16,14 +16,14 @@ Create a conda environment from the `environment.yml` file in this directory:
 conda env create --file environment.yml
 ```
 
-This will create a conda environment named `lightningsim-benchmarks`.
+This will create a conda environment named `lightningsimv2-benchmarks`.
 
 ## Usage
 
 Activate the conda environment:
 
 ```bash
-conda activate lightningsim-benchmarks
+conda activate lightningsimv2-benchmarks
 ```
 
 Then, run the `benchmark.py` script:
@@ -32,10 +32,10 @@ Then, run the `benchmark.py` script:
 ./benchmark.py
 ```
 
-This will run all benchmarks. Results will be generated in CSV format in `output.csv` in each benchmark directory.
+This will run all benchmarks. Results will be generated in a single text file `results.txt`.
 
 > **Warning**
 >
-> Running all benchmarks can take quite some time! Even though benchmarks are run in parallel, certain individual benchmarks can take a long time to complete; for example, `29_flowgnn_gin` and `32_flowgnn_pna` took over an hour to complete on our system. This is because each benchmark runs Vitis HLS cosimulation for comparison with LightningSim.
+> Running all benchmarks can take quite some time! Most benchmarks run in parallel, but large ones run sequentially to avoid bogging down the system and skewing the measured performance metrics.
 >
-> Refer to Table III in the paper for the timings of each benchmark on our system, which you can use as a reference point to estimate how long each benchmark will take to run on your system.
+> Expect this to take a few hours on a modern system. It is strongly recommended to use a program such as [tmux](https://github.com/tmux/tmux/wiki) or [GNU Screen](https://www.gnu.org/software/screen/) to guard against SSH disconnects killing the script.
