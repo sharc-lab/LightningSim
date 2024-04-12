@@ -3,6 +3,7 @@
 # Script to reproduce results for LightningSimV2.
 
 import asyncio
+import ctypes
 import dataclasses
 import itertools
 import logging
@@ -19,8 +20,9 @@ from enum import Enum
 from logging import Logger, getLogger
 from math import nan
 from os import cpu_count, environ
-from multiprocessing import Barrier, Process
+from multiprocessing import Barrier, Process, Value
 from multiprocessing.synchronize import Barrier as BarrierType
+from multiprocessing.sharedctypes import Synchronized
 from pathlib import Path
 from signal import signal, SIGWINCH
 from struct import Struct
@@ -593,7 +595,9 @@ async def run_lightningsimv2(benchmark: Benchmark):
     return LSV2Data(*LSV2PackedData.unpack(stdout), max_rss)  # type: ignore
 
 
-def run_lightningsimv1_dse_point(benchmark: Path, barrier: BarrierType):
+def run_lightningsimv1_dse_point(
+    benchmark: Path, barrier: BarrierType, remaining: Synchronized
+):
     async def run_lightningsimv1_dse_point_async():
         solution = LSV1Solution(benchmark / "project/solution1")
         runner = LSV1Runner(solution)
@@ -606,10 +610,16 @@ def run_lightningsimv1_dse_point(benchmark: Path, barrier: BarrierType):
             },
         )
         barrier.wait()
-        try:
-            return (await lsv1_simulate(trace)).simulator.cycle
-        except LSV1DeadlockError:
-            return None
+        while True:
+            try:
+                await lsv1_simulate(trace)
+            except LSV1DeadlockError:
+                pass
+            with remaining.get_lock():
+                remaining_value = remaining.value
+                if remaining_value == 0:
+                    break
+                remaining.value = remaining_value - 1
 
     return asyncio.run(run_lightningsimv1_dse_point_async())
 
@@ -621,10 +631,14 @@ async def run_lightningsimv1_dse_as_child(benchmark: Path, *, logger: Logger):
         f"for {pluralize(DSE_POINTS, 'DSE point')}"
     )
 
-    barrier = Barrier(DSE_POINTS + 1)
+    worker_count = min(cpu_count() or 1, DSE_POINTS)
+    barrier = Barrier(worker_count + 1)
+    remaining = Value(ctypes.c_uint32, DSE_POINTS - worker_count)
     jobs = [
-        Process(target=run_lightningsimv1_dse_point, args=(benchmark, barrier))
-        for _ in range(DSE_POINTS)
+        Process(
+            target=run_lightningsimv1_dse_point, args=(benchmark, barrier, remaining)
+        )
+        for _ in range(worker_count)
     ]
     for job in jobs:
         job.start()
