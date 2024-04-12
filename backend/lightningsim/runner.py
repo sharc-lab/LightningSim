@@ -344,6 +344,9 @@ class Runner:
             compilation_processes.append(symbol_rename)
             return compilation_processes
 
+        # sneaky linker issues happen when LD_LIBRARY_PATH is set
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
         with self.steps[RunnerStep.ANALYZING_PROJECT]:
             xilinx_hls = Path(environ["XILINX_HLS"])
             kernel = self.solution.kernel_name
