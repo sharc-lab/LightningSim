@@ -283,8 +283,8 @@ class Runner:
 
     def get_temporary_directory_context(self):
         if self.debug:
-            return nullcontext(mkdtemp())
-        return TemporaryDirectory()
+            return nullcontext(mkdtemp(prefix="lightningsim."))
+        return TemporaryDirectory(prefix="lightningsim.")
 
     async def run(self):
         async def compile_project_file(project_file: ProjectFile, object_path: Path):
