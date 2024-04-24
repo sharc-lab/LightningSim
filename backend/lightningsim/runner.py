@@ -43,7 +43,7 @@ TEMPLATE_DIR = CONDA_PREFIX / "share/lightningsim/templates"
 CONDA_LD_LIBRARY_PATH = CONDA_PREFIX / "lib"
 
 CC = environ.get("CC", "gcc")
-LD = environ.get("CXX", "g++")
+CXX = environ.get("CXX", "g++")
 OBJCOPY = environ.get("OBJCOPY", "objcopy")
 
 
@@ -422,8 +422,8 @@ class Runner:
                     )
 
                     project_object_paths = [
-                        tempdir / source_file.compiled_name
-                        for source_file in project_source_files
+                        tempdir / f"testbench.{i}.o"
+                        for i, _ in enumerate(project_source_files)
                     ]
                     compile_project_files = gather(
                         *(
@@ -489,64 +489,41 @@ class Runner:
                     self.add_completed_processes(compile_project_files)
                     for compilation in compile_project_files:
                         compilation.check_returncode()
-                    link_testbench = await run(
-                        [
-                            LD,
-                            "-L",
-                            xilinx_hls / "lnx64/tools/systemc/lib",
-                            "-L",
-                            xilinx_hls / "lnx64/lib/csim",
-                            "-L",
-                            xilinx_hls / "lnx64/tools/fpo_v7_0",
-                            "-L",
-                            xilinx_hls / "lnx64/tools/fft_v9_1",
-                            "-L",
-                            xilinx_hls / "lnx64/tools/fir_v7_0",
-                            "-L",
-                            xilinx_hls / "lnx64/tools/dds_v6_0",
+                    link_objects = " ".join(
+                        str(path).replace(" ", "\\ ")
+                        for path in (*project_object_paths, object_path, mapper_path)
+                    )
+                    extra_ld_flags = shlex.join(
+                        str(flag)
+                        for flag in (
+                            *ldflags,
                             "-L",
                             TEMPLATE_DIR,
-                            "-L",
-                            CONDA_LD_LIBRARY_PATH,
-                            "-Xlinker",
-                            f"-rpath={xilinx_hls / 'lnx64/lib/csim'}",
-                            "-Xlinker",
-                            f"-rpath={xilinx_hls / 'lnx64/tools/fpo_v7_0'}",
-                            "-Xlinker",
-                            f"-rpath={xilinx_hls / 'lnx64/tools/fft_v9_1'}",
-                            "-Xlinker",
-                            f"-rpath={xilinx_hls / 'lnx64/tools/fir_v7_0'}",
-                            "-Xlinker",
-                            f"-rpath={xilinx_hls / 'lnx64/tools/dds_v6_0'}",
-                            "-Xlinker",
-                            f"-rpath={CONDA_LD_LIBRARY_PATH}",
-                            "-Xlinker",
-                            f"-rpath-link={xilinx_hls / 'lnx64/lib/csim'}",
-                            "-Xlinker",
-                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fpo_v7_0'}",
-                            "-Xlinker",
-                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fft_v9_1'}",
-                            "-Xlinker",
-                            f"-rpath-link={xilinx_hls / 'lnx64/tools/fir_v7_0'}",
-                            "-Xlinker",
-                            f"-rpath-link={xilinx_hls / 'lnx64/tools/dds_v6_0'}",
-                            *project_object_paths,
-                            object_path,
-                            mapper_path,
-                            *ldflags,
-                            "-lsystemc",
-                            "-lhlsmc++-GCC46",
-                            "-lhlsm-GCC46",
-                            "-lIp_floating_point_v7_0_bitacc_cmodel",
-                            "-lIp_xfft_v9_1_bitacc_cmodel",
-                            "-lIp_fir_compiler_v7_2_bitacc_cmodel",
-                            "-lIp_dds_compiler_v6_0_bitacc_cmodel",
                             "-llightningsimrt",
-                            "-pthread",
                             "-g",
                             "-O3",
                             "-flto",
-                            "-o",
+                        )
+                    )
+                    link_testbench = await run(
+                        [
+                            "make",
+                            "-B",
+                            "-f",
+                            xilinx_hls / "include/Makefile.sysc.rules",
+                            f"AUTOPILOT_ROOT={xilinx_hls}",
+                            f'AUTOPILOT_TOOL={xilinx_hls / "lnx64/tools"}',
+                            f"AUTOPILOT_MACH=lnx64",
+                            f"CXX={CXX}",
+                            f"TARGET={output_path}",
+                            f"ObjDir={tempdir_str}",
+                            f"OBJECTS={link_objects}",
+                            f"ExtraLDFlags={extra_ld_flags}",
+                            "__SIM_MATHHLS__=1",
+                            "__SIM_FPO__=1",
+                            "__SIM_FFT__=1",
+                            "__SIM_FIR__=1",
+                            "__SIM_DDS__=1",
                             output_path,
                         ],
                         cwd=self.solution.path.parent.parent,
