@@ -300,17 +300,19 @@ class Server:
         if self.trace is None:
             return False
 
-        self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL].reset()
         try:
-            with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL]:
-                self.simulation_actual = await simulate(self.trace)
-        except Exception:
-            self.simulation_actual = None
-            return False
+            self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL].reset()
+            try:
+                with self.steps[GlobalStep.RUNNING_SIMULATION_ACTUAL]:
+                    self.simulation_actual = await simulate(self.trace)
+            except Exception:
+                self.simulation_actual = None
+                return False
+            return True
 
-        if self.simulate_optimal_task is None:
-            self.simulate_optimal_task = create_task(self.simulate_optimal())
-        return True
+        finally:
+            if self.simulate_optimal_task is None:
+                self.simulate_optimal_task = create_task(self.simulate_optimal())
 
     async def simulate_optimal(self):
         if self.trace is None:
