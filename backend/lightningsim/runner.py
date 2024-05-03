@@ -38,8 +38,8 @@ from .model import Solution, ProjectFile
 from .trace_file import ResolvedTrace, await_trace_functions, read_trace, resolve_trace
 
 CONDA_PREFIX = Path(r"""/opt/anaconda1anaconda2anaconda3""")
-LLVM_ROOT = CONDA_PREFIX / "share/lightningsimv2/llvm"
-TEMPLATE_DIR = CONDA_PREFIX / "share/lightningsimv2/templates"
+LLVM_ROOT = CONDA_PREFIX / "share/lightningsim/llvm"
+TEMPLATE_DIR = CONDA_PREFIX / "share/lightningsim/templates"
 CONDA_LD_LIBRARY_PATH = CONDA_PREFIX / "lib"
 
 CC = environ.get("CC", "gcc")

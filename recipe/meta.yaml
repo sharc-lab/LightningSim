@@ -1,5 +1,5 @@
 package:
-  name: lightningsimv2
+  name: lightningsim
   version: "0.2.0"
 
 source:
@@ -8,7 +8,7 @@ source:
 build:
   number: 1
   entry_points:
-    - lightningsimv2 = lightningsimv2.main:main
+    - lightningsim = lightningsim.main:main
   script_env:
     - CCACHE_DIR
     - CCACHE_BASEDIR
@@ -50,9 +50,9 @@ requirements:
 
 test:
   imports:
-    - lightningsimv2.main
+    - lightningsim.main
 
 about:
-  home: https://github.com/sharc-lab/LightningSim/tree/v2
+  home: https://github.com/sharc-lab/LightningSim
   license: AGPL-3.0-only
   summary: A fast, accurate trace-based simulator for High-Level Synthesis.

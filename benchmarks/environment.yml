@@ -1,4 +1,4 @@
-name: lightningsimv2-benchmarks
+name: lightningsim-benchmarks
 channels:
   - https://sharc-lab.github.io/LightningSim/repo
   - conda-forge
