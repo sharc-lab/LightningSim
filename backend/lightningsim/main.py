@@ -1,6 +1,7 @@
 #!/opt/anaconda1anaconda2anaconda3/bin/python3
 
 import argparse
+import socket
 import socketio
 import uvicorn
 from asyncio import FIRST_COMPLETED, Event, Future, Task, create_task, run, wait
@@ -16,6 +17,10 @@ from .model import Solution
 from .runner import CompletedProcess, Runner, RunnerStep, Step
 from .simulator import Simulation, simulate
 from .trace_file import ResolvedStream, ResolvedTrace, SimulationParameters
+
+
+DEFAULT_PORT_MIN = 8080
+DEFAULT_PORT_MAX = 8099
 
 
 class GlobalStep(Enum):
@@ -38,7 +43,7 @@ class Server:
         self,
         solution_dir: Path,
         host: str,
-        port: int,
+        port: int | None,
         wait_for_next_synthesis=True,
         debug=False,
     ):
@@ -62,7 +67,8 @@ class Server:
                 "/": "/opt/anaconda1anaconda2anaconda3/share/lightningsim/public/",
             },
         )
-        self.config = uvicorn.Config(self.app, host=host, port=port)
+        self.host = host
+        self.port = port
         self.last_state = {
             "status": None,
             "testbench": None,
@@ -333,8 +339,31 @@ class Server:
             return False
         return True
 
+    def get_port(self):
+        if self.port is not None:
+            return self.port
+
+        # This may be subject to TOCTOU race conditions but it's better than
+        # what we had before, while minimizing user friction (ideally we'd just
+        # use port 0 and let the OS auto-assign a port, but that makes it hard
+        # to port-forward LightningSim in advance when using it over SSH, or
+        # reuse the same port-forward when restarting LightningSim)
+        sock = socket.socket(family=socket.AF_INET6 if ":" in self.host else socket.AF_INET)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        for port in range(DEFAULT_PORT_MIN, DEFAULT_PORT_MAX + 1):
+            try:
+                sock.bind((self.host, port))
+                return port
+            except OSError:
+                pass
+
+        # Getting pretty far from our desired port number, just give up and let
+        # the OS choose
+        return 0
+
     async def run(self):
-        server = uvicorn.Server(self.config)
+        config = uvicorn.Config(self.app, host=self.host, port=self.get_port())
+        server = uvicorn.Server(config)
         self.generate_trace_task = create_task(self.generate_trace())
         await server.serve()
 
@@ -380,7 +409,6 @@ def main():
         "-p",
         "--port",
         type=int,
-        default=8080,
         help="Port to bind to",
     )
     parser.add_argument(
