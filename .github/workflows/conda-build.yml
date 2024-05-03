@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Setup conda-forge channel
         run: conda config --add channels conda-forge
       - name: Install conda-build and conda-verify
@@ -35,7 +35,7 @@ jobs:
       - name: Build conda package
         run: $CONDA/bin/conda build --no-anaconda-upload --output-folder build recipe
       - name: Upload conda package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: conda-package
           path: build/
@@ -51,14 +51,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download conda package
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: conda-package
           path: repo/
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4
