@@ -1,8 +1,10 @@
 #!/opt/anaconda1anaconda2anaconda3/bin/python3
 
 import argparse
+import logging
 import socket
 import socketio
+import sys
 import uvicorn
 from asyncio import FIRST_COMPLETED, Event, Future, Task, create_task, run, wait
 from enum import Enum, auto
@@ -21,6 +23,14 @@ from .trace_file import ResolvedStream, ResolvedTrace, SimulationParameters
 
 DEFAULT_PORT_MIN = 8080
 DEFAULT_PORT_MAX = 8099
+
+
+logger = logging.getLogger("LightningSim")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 class GlobalStep(Enum):
@@ -394,6 +404,69 @@ class Server:
         self.simulate_actual_task = create_task(self.simulate_actual())
 
 
+def register_progress_callbacks(runner: Runner):
+    """Register callbacks to log each step of a simulation."""
+
+    def on_step_start(description: str):
+        """Return a callback that logs the start of a step."""
+        return lambda _: logger.info(description)
+
+    for step_name, step in (
+        ("Analyzing project...", RunnerStep.ANALYZING_PROJECT),
+        ("Compiling project...", RunnerStep.COMPILING_BITCODE),
+        ("Running testbench...", RunnerStep.RUNNING_TESTBENCH),
+        ("Parsing schedule...", RunnerStep.PARSING_SCHEDULE_DATA),
+        ("Resolving schedule from trace...", RunnerStep.RESOLVING_TRACE),
+    ):
+        runner.steps[step].on_start(on_step_start(step_name))
+
+
+async def run_simple(solution_dir: Path, debug=False) -> int:
+    """Run a full simulation for a given solution directory.
+
+    Note that this is an async function and therefore must be run in an
+    asyncio event loop.
+    """
+
+    if not solution_dir.exists():
+        logger.error("Solution directory does not exist!")
+        return 2
+
+    solution = Solution(solution_dir)
+    runner = Runner(solution, debug=debug)
+    register_progress_callbacks(runner)
+
+    # step 1: trace generation
+    trace = await runner.run()
+
+    # step 2: stall analysis
+    logger.info("Analyzing stalls...")
+    try:
+        simulation = trace.compiled.execute(trace.params)
+    except ValueError:
+        logger.error("Deadlock detected!")
+        logger.info("Try adjusting FIFO sizes through the web GUI (--gui).")
+        return 1
+
+    total_cycles = simulation.top_module.end
+    max_digits = len(f"{total_cycles}")
+    logger.info("Simulation finished.")
+
+    def print_details(module: SimulatedModule, indent=""):
+        """Print the start and end cycles of a module and its submodules."""
+        print(
+            f"{indent}"
+            f"[{module.start:{max_digits}d}-"
+            f"{module.end:{max_digits}d}] "
+            f"{module.name}"
+        )
+        for submodule in module.submodules:
+            print_details(submodule, indent=indent + "\t")
+
+    print_details(simulation.top_module)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -402,21 +475,31 @@ def main():
         help="Path to the Vitis HLS solution directory",
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Start the interactive GUI web server",
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Use CLI mode (default)",
+    )
+    parser.add_argument(
         "--host",
         type=str,
         default="127.0.0.1",
-        help="Host to bind to",
+        help="Host to bind to (GUI only)",
     )
     parser.add_argument(
         "-p",
         "--port",
         type=int,
-        help="Port to bind to",
+        help="Port to bind to (GUI only)",
     )
     parser.add_argument(
         "--skip-wait-for-synthesis",
         action="store_true",
-        help="Skip waiting for synthesis to start",
+        help="Skip waiting for synthesis to start (GUI only)",
     )
     parser.add_argument(
         "--debug",
@@ -426,15 +509,35 @@ def main():
 
     args = parser.parse_args()
     solution_dir: Path = args.solution_dir.absolute()
-    server = Server(
-        solution_dir,
-        args.host,
-        args.port,
-        wait_for_next_synthesis=not args.skip_wait_for_synthesis,
-        debug=args.debug,
-    )
-    run(server.run())
+
+    if args.gui:
+        if args.cli:
+            logger.error("Cannot specify both --gui and --cli!")
+            return 2
+
+        server = Server(
+            solution_dir,
+            args.host,
+            args.port,
+            wait_for_next_synthesis=not args.skip_wait_for_synthesis,
+            debug=args.debug,
+        )
+        run(server.run())
+        return 0
+    else:
+        if not args.cli:
+            logger.info("Starting with v0.2.2, LightningSim defaults to "
+                        "non-interactive CLI mode. To use the interactive "
+                        "web-based GUI instead, pass the --gui flag. To "
+                        "suppress this message, pass the --cli flag "
+                        "explicitly.")
+
+        if args.skip_wait_for_synthesis:
+            logger.warn("--skip-wait-for-synthesis has no effect in CLI mode; "
+                        "this is the default behavior.")
+
+        return run(run_simple(solution_dir))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
