@@ -536,7 +536,7 @@ def main():
             logger.warn("--skip-wait-for-synthesis has no effect in CLI mode; "
                         "this is the default behavior.")
 
-        return run(run_simple(solution_dir))
+        return run(run_simple(solution_dir, debug=args.debug))
 
 
 if __name__ == "__main__":
