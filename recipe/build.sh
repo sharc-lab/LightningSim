@@ -16,6 +16,11 @@ cmake -S llvm-project/llvm -B llvm-project/llvm/build \
 cmake --build llvm-project/llvm/build
 cmake --install llvm-project/llvm/build --strip
 
+# Build SystemC
+mkdir -p "$PREFIX/share/lightningsim/systemc"
+curl -fsSL 'https://www.accellera.org/images/downloads/standards/systemc/systemc-2.3.1a.tar.gz' | tar -xzf -
+(cd systemc-2.3.1a && ./configure --prefix="$PREFIX/share/lightningsim/systemc" && make && make install)
+
 # Build LightningSim templates
 mkdir -p "$PREFIX/share/lightningsim/templates"
 make DESTDIR="$PREFIX/share/lightningsim/templates"

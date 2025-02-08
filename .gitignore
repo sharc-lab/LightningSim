@@ -194,3 +194,6 @@ cython_debug/
 *.exe
 *.out
 *.app
+
+# Downloaded SystemC source distribution
+systemc-*
