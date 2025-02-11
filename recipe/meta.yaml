@@ -38,7 +38,7 @@ requirements:
   run:
     - python
     - jinja2
-    - llvmlite
+    - llvmlite=0.43
     - pyelftools
     - python-socketio
     - uvicorn-standard
