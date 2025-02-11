@@ -17,7 +17,6 @@ requirements:
   build:
     - {{ compiler('cxx') }}
     - ccache=4
-    - clang=15.0.5
     - cmake=3
     - ninja=1
     - nodejs=18

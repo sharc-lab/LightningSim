@@ -7,19 +7,32 @@
 using std::unordered_map;
 using std::queue;
 
-static unordered_map<void*, queue<T>> map;
+static unordered_map<void*, queue<uint64_t>> map;
 
 extern "C"
 {
-    T _autotb_FifoRead_iN(T* fifo)
+    void __hlslitesim_fifo_read(void* fifo, uint64_t* val, uint32_t size)
     {
-        auto iter = map.find(fifo);
-        assert((iter != map.end()) && "Tried to read nonexistent FIFO");
+        auto& q = map[fifo];
+        for (uint32_t i = 0; i < size; i++)
+        {
+            assert(!q.empty() && "Tried to read empty FIFO");
+            val[i] = q.front();
+            q.pop();
+        }
 
-        auto& q = iter->second;
-        assert((!map[fifo].empty()) && "Tried to read empty FIFO");
+        FILE* fd = __hlslitesim_trace_fd.fd;
+        if (fd != NULL)
+        {
+            fprintf(fd, "fifo_read\t%p\n", fifo);
+        }
+    }
 
-        T val = q.front();
+    uint64_t __hlslitesim_fifo_read_i64(void* fifo)
+    {
+        auto& q = map[fifo];
+        assert(!q.empty() && "Tried to read empty FIFO");
+        uint64_t val = q.front();
         q.pop();
 
         FILE* fd = __hlslitesim_trace_fd.fd;
@@ -27,22 +40,34 @@ extern "C"
         {
             fprintf(fd, "fifo_read\t%p\n", fifo);
         }
+
         return val;
     }
 
-    T _autotb_FifoWrite_iN(T* fifo, T val)
+    void __hlslitesim_fifo_write(void* fifo, const uint64_t* val, uint32_t size)
     {
-        if (map.find(fifo) == map.end())
+        auto &q = map[fifo];
+        for (uint32_t i = 0; i < size; i++)
         {
-            map[fifo] = queue<T>();
+            q.push(val[i]);
         }
-        map[fifo].push(val);
 
         FILE* fd = __hlslitesim_trace_fd.fd;
         if (fd != NULL)
         {
             fprintf(fd, "fifo_write\t%p\n", fifo);
         }
-        return val;
+    }
+
+    void __hlslitesim_fifo_write_i64(void* fifo, uint64_t val)
+    {
+        auto &q = map[fifo];
+        q.push(val);
+
+        FILE* fd = __hlslitesim_trace_fd.fd;
+        if (fd != NULL)
+        {
+            fprintf(fd, "fifo_write\t%p\n", fifo);
+        }
     }
 }

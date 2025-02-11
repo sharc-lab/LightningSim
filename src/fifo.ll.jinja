@@ -1,0 +1,42 @@
+source_filename = "fifo_{{T}}.ll"
+target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare i64 @__hlslitesim_fifo_read_i64(i8* %fifo)
+declare void @__hlslitesim_fifo_write_i64(i8* %fifo, i64 %value)
+declare void @__hlslitesim_fifo_read(i8* %fifo, i64* %buffer, i32 %count)
+declare void @__hlslitesim_fifo_write(i8* %fifo, i64* %buffer, i32 %count)
+
+define {{T}} @_autotb_FifoRead_{{T}}({{T}}* %fifo) willreturn {
+entry:
+  %fifo_i8 = bitcast {{T}}* %fifo to i8*
+{%- if N < 64 %}
+  %value_i64 = call i64 @__hlslitesim_fifo_read_i64(i8* %fifo_i8)
+  %value = trunc i64 %value_i64 to {{T}}
+{%- elif N == 64 %}
+  %value = call i64 @__hlslitesim_fifo_read_i64(i8* %fifo_i8)
+{%- else %}
+  %buffer_i64 = alloca i64, i32 {{(-(N // -64))}}, align 8
+  call void @__hlslitesim_fifo_read(i8* %fifo_i8, i64* %buffer_i64, i32 {{(-(N // -64))}})
+  %buffer = bitcast i64* %buffer_i64 to {{T}}*
+  %value = load {{T}}, {{T}}* %buffer
+{%- endif %}
+  ret {{T}} %value
+}
+
+define {{T}} @_autotb_FifoWrite_{{T}}({{T}}* %fifo, {{T}} %value) willreturn {
+entry:
+  %fifo_i8 = bitcast {{T}}* %fifo to i8*
+{%- if N < 64 %}
+  %value_i64 = zext {{T}} %value to i64
+  call void @__hlslitesim_fifo_write_i64(i8* %fifo_i8, i64 %value_i64)
+{%- elif N == 64 %}
+  call void @__hlslitesim_fifo_write_i64(i8* %fifo_i8, i64 %value)
+{%- else %}
+  %buffer_i64 = alloca i64, i32 {{(-(N // -64))}}, align 8
+  %buffer = bitcast i64* %buffer_i64 to {{T}}*
+  store {{T}} %value, {{T}}* %buffer
+  call void @__hlslitesim_fifo_write(i8* %fifo_i8, i64* %buffer_i64, i32 {{(-(N // -64))}})
+{%- endif %}
+  ret {{T}} %value
+}
