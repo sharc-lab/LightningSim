@@ -7,7 +7,7 @@ name = "lightningsim"
 authors = [
     {name = "Rishov Sarkar", email = "rishov.sarkar@gatech.edu"},
 ]
-version = "0.2.2"
+version = "0.2.3"
 
 [tool.setuptools.packages.find]
 namespaces = false
