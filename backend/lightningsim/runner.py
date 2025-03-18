@@ -312,7 +312,7 @@ class Runner:
                 return compilation_processes
 
             kernel_cxx_mangled_prefix = f"_Z{len(kernel)}{kernel}"
-            kernel_target_symbol = f"apatb_{kernel}_hw"
+            kernel_target_symbol = f"apatb_{kernel}_ir"
             with open(object_path, "rb") as object_fp:
                 elffile = ELFFile(object_fp)
                 kernel_source_symbols = [
@@ -399,11 +399,11 @@ class Runner:
                         )
                     )
 
-                    mapper_input_path = (
+                    mapper_hw_input_path = (
                         self.solution.path / f".autopilot/db/mapper_{kernel}.cpp"
                     )
-                    mapper_path = tempdir / f"mapper_{kernel}.o"
-                    compile_mapper = create_task(
+                    mapper_hw_path = tempdir / f"mapper_{kernel}.o"
+                    compile_mapper_hw = create_task(
                         run(
                             [
                                 CC,
@@ -415,11 +415,11 @@ class Runner:
                                 "-I",
                                 SYSTEMC_ROOT / "include",
                                 "-c",
-                                mapper_input_path,
+                                mapper_hw_input_path,
                                 "-g",
                                 "-fpermissive",
                                 "-o",
-                                mapper_path,
+                                mapper_hw_path,
                             ],
                         )
                     )
@@ -444,6 +444,24 @@ class Runner:
                             generated = template.apply(function, out_dir=tempdir)
                             if generated is not None:
                                 link_input_paths.append(generated)
+
+                    mapper_ir_input_path = (
+                        self.solution.path / f".autopilot/db/apatb_{kernel}_ir.bc"
+                    )
+                    mapper_ir_path = tempdir / f"apatb_{kernel}_ir.bc"
+                    extract_mapper_ir = await run(
+                        [
+                            LLVM_ROOT / "bin/llvm-extract",
+                            "-func",
+                            f"apatb_{kernel}_ir",
+                            "-recursive",
+                            mapper_ir_input_path,
+                            "-o",
+                            mapper_ir_path,
+                        ],
+                        check=True,
+                    )
+                    link_input_paths.append(mapper_ir_path)
 
                     opt_pass = await opt_pass
                     self.add_completed_process(opt_pass)
@@ -481,9 +499,9 @@ class Runner:
 
                 with self.steps[RunnerStep.LINKING_TESTBENCH]:
                     output_path = output_dir / f"testbench_{kernel}"
-                    compile_mapper = await compile_mapper
-                    self.add_completed_process(compile_mapper)
-                    compile_mapper.check_returncode()
+                    compile_mapper_hw = await compile_mapper_hw
+                    self.add_completed_process(compile_mapper_hw)
+                    compile_mapper_hw.check_returncode()
                     compile_project_files = [
                         compilation_process
                         for compilation_processes in await compile_project_files
@@ -494,7 +512,7 @@ class Runner:
                         compilation.check_returncode()
                     link_objects = " ".join(
                         str(path).replace(" ", "\\ ")
-                        for path in (*project_object_paths, object_path, mapper_path)
+                        for path in (*project_object_paths, object_path, mapper_hw_path)
                     )
                     extra_ld_flags = shlex.join(
                         str(flag)

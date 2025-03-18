@@ -9,7 +9,7 @@ cmake -S llvm-project/llvm -B llvm-project/llvm/build \
     -DLLVM_TARGETS_TO_BUILD=X86 \
     -DLLVM_ENABLE_PROJECTS=clang \
     -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON \
-    -DLLVM_TOOLCHAIN_TOOLS='llvm-link;opt' \
+    -DLLVM_TOOLCHAIN_TOOLS='llvm-link;llvm-extract;opt' \
     -DLLVM_BUILD_LLVM_DYLIB=ON \
     -DLLVM_LINK_LLVM_DYLIB=ON \
     -DCMAKE_BUILD_TYPE=Release
