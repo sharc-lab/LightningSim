@@ -1,6 +1,7 @@
 use std::ops;
 
 use pyo3::prelude::*;
+use bincode::{Decode, Encode};
 
 use crate::{node::NodeWithDelay, ClockCycle};
 
@@ -11,15 +12,15 @@ pub const MAX_RCTL_DEPTH: RctlDepth = 16;
 pub type AxiAddress = u64;
 pub type RctlDepth = u8;
 
-#[pyclass]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[pyclass(module="lightningsim._core")]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Decode, Encode)]
 pub struct AxiInterface {
     #[pyo3(get)]
     pub address: AxiAddress,
 }
 
-#[pyclass]
-#[derive(Clone, Copy)]
+#[pyclass(module="lightningsim._core")]
+#[derive(Clone, Copy, Decode, Encode)]
 pub struct AxiAddressRange {
     #[pyo3(get)]
     pub offset: AxiAddress,
@@ -46,13 +47,13 @@ impl ops::Add<AxiAddress> for AxiAddressRange {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Decode, Encode)]
 pub struct AxiGenericIoNode {
     pub(crate) node: NodeWithDelay,
     pub(crate) range: AxiAddressRange,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Decode, Encode)]
 pub struct AxiInterfaceIoNodes {
     pub(crate) readreqs: Box<[AxiGenericIoNode]>,
     pub(crate) reads: Box<[AxiGenericIoNode]>,
@@ -61,7 +62,7 @@ pub struct AxiInterfaceIoNodes {
     pub(crate) writeresps: Box<[NodeWithDelay]>,
 }
 
-#[pyclass]
+#[pyclass(module="lightningsim._core")]
 #[derive(Clone)]
 pub struct AxiGenericIo {
     #[pyo3(get)]
@@ -70,7 +71,7 @@ pub struct AxiGenericIo {
     pub range: AxiAddressRange,
 }
 
-#[pyclass]
+#[pyclass(module="lightningsim._core")]
 #[derive(Clone)]
 pub struct AxiInterfaceIo {
     #[pyo3(get)]

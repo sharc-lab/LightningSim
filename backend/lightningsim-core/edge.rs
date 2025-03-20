@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     axi_interface::{AxiInterface, AXI_READ_OVERHEAD, AXI_WRITE_OVERHEAD},
     fifo::{Fifo, FifoType},
@@ -12,7 +14,7 @@ pub type EdgeIndex = usize;
 /// As edges are stored in CSR format, the destination node is not stored
 /// explicitly as it is implicit in the position of the edge within the edge
 /// list.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Decode, Encode)]
 pub enum Edge {
     /// An edge derived from the control flow of the simulation. The exact
     /// source node and edge delay are known at the time of graph construction
@@ -90,7 +92,7 @@ impl Edge {
                 Ok(depth
                     .and_then(|depth| index.checked_sub(depth))
                     .map(|index| NodeWithDelay {
-                        node: simulation.fifo_nodes[&fifo].reads[index],
+                        node: simulation.node_metadata.fifo_nodes[&fifo].reads[index],
                         delay: FifoType::from_depth(depth).war_delay(),
                     }))
             }

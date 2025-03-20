@@ -4,8 +4,9 @@ mod edge;
 mod fifo;
 mod node;
 
-use std::{cmp, fmt, iter, sync::Arc};
+use std::{borrow::Cow, cmp, fmt, iter, sync::Arc};
 
+use bincode::{Decode, Encode};
 use bitvec::bitvec;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rayon::prelude::*;
@@ -30,23 +31,22 @@ pub type ClockCycle = u64;
 pub type SimulationStage = u32;
 pub(crate) type SimulationResult = Result<Vec<ClockCycle>, SimulationError>;
 
-#[pyclass]
-#[derive(Clone)]
+#[pyclass(module = "lightningsim._core")]
+#[derive(Clone, Decode, Encode)]
 pub struct CompiledSimulation {
     pub(crate) graph: SimulationGraph,
     pub(crate) top_module: CompiledModule,
-    pub(crate) fifo_nodes: Arc<FxHashMap<Fifo, FifoIoNodes>>,
-    pub(crate) axi_interface_nodes: Arc<FxHashMap<AxiInterface, AxiInterfaceIoNodes>>,
+    pub(crate) node_metadata: Arc<NodeMetadata>,
     pub(crate) end_node: NodeIndex,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Decode, Encode)]
 pub(crate) struct SimulationGraph {
     pub node_offsets: Vec<usize>,
     pub edges: Vec<Option<Edge>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Decode, Encode)]
 pub(crate) struct CompiledModule {
     pub name: String,
     /// The start node + delay of this module execution.
@@ -55,6 +55,12 @@ pub(crate) struct CompiledModule {
     pub end: NodeWithDelay,
     pub submodules: Box<[CompiledModule]>,
     pub inherit_ap_continue: bool,
+}
+
+#[derive(Clone, Decode, Encode)]
+pub(crate) struct NodeMetadata {
+    pub(crate) fifo_nodes: FxHashMap<Fifo, FifoIoNodes>,
+    pub(crate) axi_interface_nodes: FxHashMap<AxiInterface, AxiInterfaceIoNodes>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,17 +78,16 @@ pub struct SimulationParameters {
     ap_ctrl_chain_top_port_count: Option<u32>,
 }
 
-#[pyclass]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone)]
 pub struct Simulation {
     node_cycles: Vec<ClockCycle>,
     #[pyo3(get)]
     top_module: SimulatedModule,
-    fifo_nodes: Arc<FxHashMap<Fifo, FifoIoNodes>>,
-    axi_interface_nodes: Arc<FxHashMap<AxiInterface, AxiInterfaceIoNodes>>,
+    node_metadata: Arc<NodeMetadata>,
 }
 
-#[pyclass]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone)]
 pub struct SimulatedModule {
     #[pyo3(get)]
@@ -95,7 +100,7 @@ pub struct SimulatedModule {
     submodules: Vec<SimulatedModule>,
 }
 
-#[pyclass]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone)]
 pub struct DsePoint {
     #[pyo3(get)]
@@ -193,6 +198,21 @@ impl CompiledSimulation {
 
 #[pymethods]
 impl CompiledSimulation {
+    #[new]
+    fn new(serialized: &[u8]) -> PyResult<Self> {
+        Ok(
+            bincode::decode_from_slice(serialized, bincode::config::standard())
+                .map_err(|e| PyValueError::new_err(format!("deserialization error: {}", e)))?
+                .0,
+        )
+    }
+
+    fn __getnewargs__(&self) -> PyResult<(Cow<[u8]>,)> {
+        Ok((bincode::encode_to_vec(self, bincode::config::standard())
+            .map_err(|e| PyValueError::new_err(format!("serialization error: {}", e)))?
+            .into(),))
+    }
+
     fn execute(&self, py: Python<'_>, parameters: SimulationParameters) -> PyResult<Simulation> {
         py.allow_threads(|| {
             let node_cycles = self.resolve(&parameters)?;
@@ -204,8 +224,7 @@ impl CompiledSimulation {
             Ok(Simulation {
                 node_cycles,
                 top_module,
-                fifo_nodes: self.fifo_nodes.clone(),
-                axi_interface_nodes: self.axi_interface_nodes.clone(),
+                node_metadata: self.node_metadata.clone(),
             })
         })
     }
@@ -256,7 +275,8 @@ impl CompiledSimulation {
         let write_count = fifo_ids
             .into_iter()
             .map(|fifo_id| {
-                self.fifo_nodes
+                self.node_metadata
+                    .fifo_nodes
                     .get(&Fifo { id: fifo_id })
                     .map(|fifo_io| fifo_io.writes.len())
                     .ok_or_else(|| PyValueError::new_err(format!("no FIFO with id {}", fifo_id)))
@@ -307,9 +327,38 @@ impl CompiledSimulation {
 
 #[pymethods]
 impl Simulation {
+    #[new]
+    fn new(
+        node_cycles: Vec<ClockCycle>,
+        top_module: SimulatedModule,
+        serialized_node_metadata: &[u8],
+    ) -> PyResult<Self> {
+        Ok(Self {
+            node_cycles,
+            top_module,
+            node_metadata: bincode::decode_from_slice(
+                serialized_node_metadata,
+                bincode::config::standard(),
+            )
+            .map_err(|e| PyValueError::new_err(format!("deserialization error: {}", e)))?
+            .0,
+        })
+    }
+
+    fn __getnewargs__(&self) -> PyResult<(Vec<ClockCycle>, SimulatedModule, Cow<[u8]>)> {
+        Ok((
+            self.node_cycles.clone(),
+            self.top_module.clone(),
+            bincode::encode_to_vec(&self.node_metadata, bincode::config::standard())
+                .map_err(|e| PyValueError::new_err(format!("serialization error: {}", e)))?
+                .into(),
+        ))
+    }
+
     #[getter]
     fn fifo_io(&self) -> FxHashMap<Fifo, FifoIo> {
-        self.fifo_nodes
+        self.node_metadata
+            .fifo_nodes
             .iter()
             .map(|(fifo, nodes)| (*fifo, FifoIo::new(nodes, &self.node_cycles)))
             .collect()
@@ -317,7 +366,8 @@ impl Simulation {
 
     #[getter]
     fn axi_io(&self) -> FxHashMap<AxiInterface, AxiInterfaceIo> {
-        self.axi_interface_nodes
+        self.node_metadata
+            .axi_interface_nodes
             .iter()
             .map(|(interface, nodes)| (*interface, AxiInterfaceIo::new(nodes, &self.node_cycles)))
             .collect()
@@ -434,6 +484,28 @@ impl SimulatedModule {
     }
 }
 
+#[pymethods]
+impl SimulatedModule {
+    #[new]
+    fn py_new(
+        name: String,
+        start: ClockCycle,
+        end: ClockCycle,
+        submodules: Vec<SimulatedModule>,
+    ) -> Self {
+        Self {
+            name,
+            start,
+            end,
+            submodules,
+        }
+    }
+
+    fn __getnewargs__(&self) -> (&str, ClockCycle, ClockCycle, Vec<SimulatedModule>) {
+        (&self.name, self.start, self.end, self.submodules.clone())
+    }
+}
+
 impl fmt::Display for SimulationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -482,8 +554,8 @@ impl From<Option<u32>> for ApContinue {
     }
 }
 
-#[pymodule]
-fn _core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+#[pymodule(module = "lightningsim._core")]
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SimulationBuilder>()?;
     m.add_class::<CompiledSimulation>()?;
     m.add_class::<Simulation>()?;

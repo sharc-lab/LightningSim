@@ -1,6 +1,7 @@
 use std::{cmp, iter, ops};
 
 use pyo3::prelude::*;
+use bincode::{Decode, Encode};
 
 use crate::{
     node::{NodeIndex, NodeWithDelay},
@@ -14,8 +15,8 @@ const SHIFT_REGISTER_WAR_DELAY: ClockCycle = 1;
 const RAM_RAW_DELAY: ClockCycle = 2;
 const RAM_WAR_DELAY: ClockCycle = 1;
 
-#[pyclass]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[pyclass(module="lightningsim._core")]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Decode, Encode)]
 pub struct Fifo {
     #[pyo3(get)]
     pub id: FifoId,
@@ -26,7 +27,7 @@ pub enum FifoType {
     Ram,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Decode, Encode)]
 pub struct FifoIoNodes {
     /// Nodes which write to this FIFO.
     ///
@@ -43,7 +44,7 @@ pub struct FifoIoNodes {
     pub(crate) reads: Box<[NodeIndex]>,
 }
 
-#[pyclass]
+#[pyclass(module="lightningsim._core")]
 #[derive(Clone)]
 pub struct FifoIo {
     #[pyo3(get)]

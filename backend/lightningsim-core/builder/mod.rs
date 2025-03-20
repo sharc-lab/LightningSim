@@ -29,12 +29,12 @@ use crate::{
     edge::Edge,
     fifo::{Fifo, FifoId, FifoIoNodes},
     node::{NodeIndex, NodeWithDelay},
-    ClockCycle, CompiledSimulation, SimulationStage,
+    ClockCycle, CompiledSimulation, NodeMetadata, SimulationStage,
 };
 
 use self::axi_builder::FirstReadData;
 
-#[pyclass]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone)]
 pub struct SimulationBuilder {
     builders: SimulationComponentBuilders,
@@ -685,20 +685,24 @@ impl TryFrom<SimulationComponentBuilders> for CompiledSimulation {
         Ok(CompiledSimulation {
             graph: value.edges.try_into()?,
             top_module: value.modules.try_into()?,
-            fifo_nodes: Arc::new(value
-                .fifos
-                .into_iter()
-                .map(|(fifo, builder)| builder.try_into().map(|nodes: FifoIoNodes| (fifo, nodes)))
-                .collect::<Result<_, _>>()?),
-            axi_interface_nodes: Arc::new(value
-                .axi
-                .into_iter()
-                .map(|(axi_interface, builder)| {
-                    builder
-                        .try_into()
-                        .map(|nodes: AxiInterfaceIoNodes| (axi_interface, nodes))
-                })
-                .collect::<Result<_, _>>()?),
+            node_metadata: Arc::new(NodeMetadata {
+                fifo_nodes: value
+                    .fifos
+                    .into_iter()
+                    .map(|(fifo, builder)| {
+                        builder.try_into().map(|nodes: FifoIoNodes| (fifo, nodes))
+                    })
+                    .collect::<Result<_, _>>()?,
+                axi_interface_nodes: value
+                    .axi
+                    .into_iter()
+                    .map(|(axi_interface, builder)| {
+                        builder
+                            .try_into()
+                            .map(|nodes: AxiInterfaceIoNodes| (axi_interface, nodes))
+                    })
+                    .collect::<Result<_, _>>()?,
+            }),
             end_node: value
                 .end_node
                 .ok_or_else(|| PyValueError::new_err("incomplete trace"))?,

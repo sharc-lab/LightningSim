@@ -1,10 +1,12 @@
 use std::ops;
 
+use bincode::{Decode, Encode};
+
 use crate::ClockCycle;
 
 pub type NodeIndex = u32;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Decode, Encode)]
 pub struct NodeWithDelay {
     pub node: NodeIndex,
     pub delay: ClockCycle,
