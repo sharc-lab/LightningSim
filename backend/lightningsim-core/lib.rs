@@ -74,6 +74,7 @@ pub(crate) enum SimulationError {
 #[derive(Clone, FromPyObject)]
 pub struct SimulationParameters {
     fifo_depths: FxHashMap<FifoId, Option<usize>>,
+    fifo_widths: FxHashMap<FifoId, u32>,
     axi_delays: FxHashMap<AxiAddress, ClockCycle>,
     ap_ctrl_chain_top_port_count: Option<u32>,
 }
@@ -233,7 +234,6 @@ impl CompiledSimulation {
         &self,
         py: Python<'_>,
         base_config: SimulationParameters,
-        fifo_widths: FxHashMap<FifoId, u32>,
         fifo_design_space: Vec<FxHashMap<FifoId, usize>>,
     ) -> PyResult<Vec<DsePoint>> {
         Ok(py.allow_threads(|| {
@@ -246,7 +246,8 @@ impl CompiledSimulation {
                         .iter()
                         .filter_map(|(fifo_id, depth)| depth.map(|depth| (fifo_id, depth)))
                         .try_fold(0, |bram_count, (fifo_id, depth)| {
-                            fifo_widths
+                            base_config
+                                .fifo_widths
                                 .get(fifo_id)
                                 .copied()
                                 .ok_or(SimulationError::FifoWidthNotProvided(*fifo_id))
@@ -254,6 +255,7 @@ impl CompiledSimulation {
                         })?;
                     let parameters = SimulationParameters {
                         fifo_depths,
+                        fifo_widths: base_config.fifo_widths.clone(),
                         axi_delays: base_config.axi_delays.clone(),
                         ap_ctrl_chain_top_port_count: base_config.ap_ctrl_chain_top_port_count,
                     };
@@ -412,6 +414,13 @@ impl SimulationParameters {
             .get(&fifo.id)
             .copied()
             .ok_or(SimulationError::FifoDepthNotProvided(fifo.id))
+    }
+
+    pub(crate) fn get_fifo_width(&self, fifo: Fifo) -> Result<u32, SimulationError> {
+        self.fifo_widths
+            .get(&fifo.id)
+            .copied()
+            .ok_or(SimulationError::FifoWidthNotProvided(fifo.id))
     }
 
     pub(crate) fn get_axi_delay(

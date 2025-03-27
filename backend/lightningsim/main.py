@@ -335,6 +335,7 @@ class Server:
                 fifo_depths={
                     fifo_id: None for fifo_id in self.trace.params.fifo_depths.keys()
                 },
+                fifo_widths=self.trace.params.fifo_widths,
                 axi_delays=self.trace.params.axi_delays,
                 ap_ctrl_chain_top_port_count=self.trace.params.ap_ctrl_chain_top_port_count,
             ),

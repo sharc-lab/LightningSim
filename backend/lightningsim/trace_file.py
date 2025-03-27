@@ -311,6 +311,7 @@ class ResolvedTrace:
 @dataclass(slots=True)
 class SimulationParameters:
     fifo_depths: Mapping[int, int | None]
+    fifo_widths: Mapping[int, int]
     axi_delays: Mapping[int, int]
     ap_ctrl_chain_top_port_count: int | None
 
@@ -683,6 +684,10 @@ async def resolve_trace(
         params=SimulationParameters(
             fifo_depths={
                 stream.id: depth for stream, depth in trace.channel_depths.items()
+            },
+            fifo_widths={
+                stream.id: fifo_widths.get(stream.id, 0)
+                for stream in trace.channel_depths.keys()
             },
             axi_delays={
                 interface.address: latency

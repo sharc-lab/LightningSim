@@ -1,7 +1,7 @@
 use std::{cmp, iter, ops};
 
-use pyo3::prelude::*;
 use bincode::{Decode, Encode};
+use pyo3::prelude::*;
 
 use crate::{
     node::{NodeIndex, NodeWithDelay},
@@ -15,7 +15,7 @@ const SHIFT_REGISTER_WAR_DELAY: ClockCycle = 1;
 const RAM_RAW_DELAY: ClockCycle = 2;
 const RAM_WAR_DELAY: ClockCycle = 1;
 
-#[pyclass(module="lightningsim._core")]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Decode, Encode)]
 pub struct Fifo {
     #[pyo3(get)]
@@ -44,7 +44,7 @@ pub struct FifoIoNodes {
     pub(crate) reads: Box<[NodeIndex]>,
 }
 
-#[pyclass(module="lightningsim._core")]
+#[pyclass(module = "lightningsim._core")]
 #[derive(Clone)]
 pub struct FifoIo {
     #[pyo3(get)]
@@ -54,10 +54,11 @@ pub struct FifoIo {
 }
 
 impl FifoType {
-    pub fn from_depth(depth: Option<usize>) -> Self {
+    pub fn from_width_and_depth(width: u32, depth: Option<usize>) -> Self {
         match depth {
             Some(depth) => {
-                if depth <= 2 {
+                let width: usize = width.try_into().unwrap();
+                if depth <= 2 || width * depth <= 1024 {
                     Self::ShiftRegister
                 } else {
                     Self::Ram
@@ -130,7 +131,10 @@ impl FifoIo {
 }
 
 pub fn get_bram_count(width: u32, depth: usize) -> usize {
-    if matches!(FifoType::from_depth(Some(depth)), FifoType::Ram) {
+    if matches!(
+        FifoType::from_width_and_depth(width, Some(depth)),
+        FifoType::Ram
+    ) {
         let mut bram_count = 0;
         let mut remaining_width: usize = width.try_into().unwrap();
 
@@ -177,20 +181,34 @@ pub fn get_bram_count(width: u32, depth: usize) -> usize {
 }
 
 pub fn get_design_space(width: u32, write_count: usize) -> impl Iterator<Item = usize> {
+    fn get_step_size(width: u32) -> usize {
+        if width >= 18 {
+            1024
+        } else if width >= 9 {
+            2048
+        } else if width >= 4 {
+            4096
+        } else if width >= 2 {
+            8192
+        } else {
+            16384
+        }
+    }
+
     let initial_depth = 2;
     let max_depth = cmp::max(write_count, initial_depth);
-    let max_bram_count = get_bram_count(width, max_depth);
+    let step_size = get_step_size(width);
+
+    let width_usize = width.try_into().unwrap();
+    let max_srl_depth = 1024usize
+        .checked_div(width_usize)
+        .filter(|&depth| depth > initial_depth);
+    let bram_start_depth =
+        (max_srl_depth.unwrap_or(initial_depth) + 1).div_ceil(step_size) * step_size;
 
     iter::once(initial_depth)
-        .chain((1024..max_depth).step_by(1024))
-        .map_while(move |depth| {
-            let bram_count = get_bram_count(width, depth);
-            (bram_count != max_bram_count).then(|| {
-                let next_depth = (depth + 1024) / 1024 * 1024;
-                let next_bram_count = get_bram_count(width, next_depth);
-                (bram_count != next_bram_count).then_some(depth)
-            })
-        })
-        .flatten()
+        .chain(max_srl_depth)
+        .chain((bram_start_depth..max_depth).step_by(step_size))
+        .filter(move |&depth| depth < max_depth)
         .chain(iter::once(max_depth))
 }

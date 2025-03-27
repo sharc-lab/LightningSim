@@ -83,17 +83,19 @@ impl Edge {
         match *self {
             Edge::ControlFlow(node) => Ok(Some(node)),
             Edge::FifoRaw { u, fifo } => {
+                let width = parameters.get_fifo_width(fifo)?;
                 let depth = parameters.get_fifo_depth(fifo)?;
-                let fifo_type = FifoType::from_depth(depth);
+                let fifo_type = FifoType::from_width_and_depth(width, depth);
                 Ok(Some(u + fifo_type.raw_delay()))
             }
             Edge::FifoWar { fifo, index } => {
+                let width = parameters.get_fifo_width(fifo)?;
                 let depth = parameters.get_fifo_depth(fifo)?;
                 Ok(depth
                     .and_then(|depth| index.checked_sub(depth))
                     .map(|index| NodeWithDelay {
                         node: simulation.node_metadata.fifo_nodes[&fifo].reads[index],
-                        delay: FifoType::from_depth(depth).war_delay(),
+                        delay: FifoType::from_width_and_depth(width, depth).war_delay(),
                     }))
             }
             Edge::AxiRctl { u, interface } => {
