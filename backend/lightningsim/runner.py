@@ -96,6 +96,23 @@ FUNCTION_TEMPLATES = [
         },
         template=Template((TEMPLATE_DIR / "m_axi.ll.jinja").read_text()),
     ),
+    FunctionTemplate(
+        # AXI-Stream on top-level arrays (18_basic_examples_vhls_axi_stream_no_side_channel)
+        input=re.compile(
+            r"_ssdm_op_(Read|Write)\.axis\.(?P<name>(?:volatile\.)?i(?P<N>\d+)P128A)"
+        ),
+        output="axis_{name}.ll",
+        mapper=lambda groupdict: {
+            "T": f'i{groupdict["N"]}',
+            "name": groupdict["name"],
+            # bytes per element in the testbench's array, i.e. sizeof(ap_int<N>):
+            # the next power of two up to 8 bytes, whole 64-bit words beyond that
+            "stride": next(b for b in (1, 2, 4, 8) if 8 * b >= int(groupdict["N"]))
+            if int(groupdict["N"]) <= 64
+            else 8 * -(-int(groupdict["N"]) // 64),
+        },
+        template=Template((TEMPLATE_DIR / "axis.ll.jinja").read_text()),
+    ),
 ]
 
 
@@ -821,6 +838,9 @@ class Runner:
                 )
                 self.testbench = testbench_process
                 self.add_completed_process(testbench_process)
+                # a failing testbench means the simulated data is wrong; stop rather
+                # than report a cycle count for it (from isaac)
+                testbench_process.check_returncode()
 
         with self.steps[RunnerStep.PARSING_SCHEDULE_DATA]:
             trace = await await_trace_functions(read_trace_result)

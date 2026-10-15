@@ -1,0 +1,21 @@
+source_filename = "axis_{{name}}.ll"
+target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare i8* @__hlslitesim_axis_next(i8* %port, i32 %stride)
+
+define {{T}} @_ssdm_op_Read.axis.{{name}}({{T}} addrspace(128)* %port) {
+  %1 = addrspacecast {{T}} addrspace(128)* %port to i8*
+  %2 = call i8* @__hlslitesim_axis_next(i8* %1, i32 {{stride}})
+  %3 = bitcast i8* %2 to {{T}}*
+  %4 = load {{T}}, {{T}}* %3
+  ret {{T}} %4
+}
+
+define void @_ssdm_op_Write.axis.{{name}}({{T}} addrspace(128)* %port, {{T}} %value) {
+  %1 = addrspacecast {{T}} addrspace(128)* %port to i8*
+  %2 = call i8* @__hlslitesim_axis_next(i8* %1, i32 {{stride}})
+  %3 = bitcast i8* %2 to {{T}}*
+  store {{T}} %value, {{T}}* %3
+  ret void
+}

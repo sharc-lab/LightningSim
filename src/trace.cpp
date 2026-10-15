@@ -95,6 +95,12 @@ extern "C"
             return;
         }
 
+        if (strcmp(reinterpret_cast<const char*>(type), "axis") == 0)
+        {
+            __hlslitesim_axis_reset(address);
+            return;
+        }
+
         if (strcmp(reinterpret_cast<const char*>(type), "ap_ctrl_chain") == 0)
         {
             FILE* fd = __hlslitesim_trace_fd.fd;
