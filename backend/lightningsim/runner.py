@@ -99,6 +99,157 @@ FUNCTION_TEMPLATES = [
 ]
 
 
+# --- ABI adapter for by-value scalar kernel arguments -------------------------
+# Vitis (2023.1 and later, at least) declares small scalar kernel arguments
+# (ap_int/ap_uint/ap_fixed, lowered to __cosim_sN__) BY POINTER in
+# apatb_<kernel>_ir, while a normally compiled C++ testbench passes them BY
+# VALUE.  Renaming the testbench's call onto apatb_<kernel>_ir therefore hands a
+# value to a function expecting an address: the testbench segfaults before the
+# kernel runs, and LightningSim reports "kernel did not run".
+#
+# generate_abi_shim() emits a small adapter with the by-value signature that
+# forwards addresses.  The testbench is pointed at the adapter instead.
+
+ABI_SHIM_STRUCT_RE = re.compile(r"struct\s+(__cosim_s(\d+)__)\s*\{[^}]*\};")
+ABI_SHIM_COSIM_RE = re.compile(r"^__cosim_s\d+__$")
+
+
+def _abi_shim_split_params(text: str):
+    """Split a parameter list on top-level commas (templates use < > without commas)."""
+    params, depth, current = [], 0, ""
+    for ch in text:
+        if ch in "<(":
+            depth += 1
+        elif ch in ">)":
+            depth -= 1
+        if ch == "," and depth == 0:
+            params.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        params.append(current.strip())
+    return params
+
+
+def _abi_shim_param_type(param: str) -> str:
+    """Strip the parameter name: 'volatile void * __xlx_p' -> 'void *'."""
+    param = param.replace("volatile", "").strip()
+    match = re.match(r"^(.*?[\*\s])([A-Za-z_]\w*)$", param)
+    if match and not match.group(2).startswith("__cosim"):
+        param = match.group(1)
+    return re.sub(r"\s+", " ", param).strip()
+
+
+def generate_abi_shim(solution_path: Path, kernel: str):
+    """Return (source, symbol) for the adapter, or None if none is needed."""
+    mapper_path = solution_path / f".autopilot/db/mapper_{kernel}.cpp"
+    if not mapper_path.is_file():
+        return None
+    text = mapper_path.read_text(errors="replace")
+
+    kernel_decl = re.search(
+        r'extern\s+"C"\s+(?P<ret>[\w:<>\s\*]+?)\s+'
+        + re.escape(kernel)
+        + r"\s*\((?P<params>[^)]*)\)\s*;",
+        text,
+    )
+    hw_decl = re.search(
+        r'extern\s+"C"\s+(?P<ret>[\w:<>\s\*]+?)\s+apatb_'
+        + re.escape(kernel)
+        + r"_hw\s*\((?P<params>[^)]*)\)",
+        text,
+    )
+    if kernel_decl is None or hw_decl is None:
+        return None
+
+    ret_type = kernel_decl.group("ret").strip()
+    kernel_params = [
+        _abi_shim_param_type(p) for p in _abi_shim_split_params(kernel_decl.group("params"))
+    ]
+    hw_params = [
+        _abi_shim_param_type(p) for p in _abi_shim_split_params(hw_decl.group("params"))
+    ]
+
+    # a non-void return is passed as an extra FIRST parameter of the wrapper
+    ret_param = None
+    if ret_type != "void" and len(hw_params) == len(kernel_params) + 1:
+        ret_param, hw_params = hw_params[0], hw_params[1:]
+
+    # Adapt when the kernel takes a scalar BY VALUE (the wrapper wants a pointer)
+    # or when it RETURNS a value (the wrapper takes the result through a hidden
+    # first pointer argument, while the testbench expects a returned value).
+    # Without the adapter the latter corrupts results: the cycle count is still
+    # right, but the testbench computes wrong values -- 01, 10, 19 and 20 all
+    # fail their own checks, while 08, which already got an adapter, passes.
+    #
+    # Nothing to adapt otherwise.  (Vitis sometimes bundles several array
+    # arguments into one buffer, so the two declarations do not always line up
+    # one-to-one; that is fine as long as neither case applies.)
+    has_byvalue_scalar = any(
+        ABI_SHIM_COSIM_RE.match(p.replace(" ", "")) for p in kernel_params
+    )
+    if not has_byvalue_scalar and ret_param is None:
+        return None
+
+    if len(kernel_params) != len(hw_params):
+        raise RuntimeError(
+            f"cannot build ABI adapter for `{kernel}`: the kernel and wrapper "
+            f"declarations do not line up "
+            f"({len(kernel_params)} kernel parameters vs {len(hw_params)} wrapper parameters)"
+        )
+
+    signature, args = [], []
+    for i, (k, h) in enumerate(zip(kernel_params, hw_params)):
+        name = f"a{i}"
+        if ABI_SHIM_COSIM_RE.match(k.replace(" ", "")) and h.rstrip().endswith("*"):
+            signature.append(f"{k} {name}")
+            args.append(f"&{name}")  # by value in, by address out
+        elif "*" in k:
+            signature.append(f"void *{name}")
+            args.append(name)
+        else:
+            signature.append(f"{k} {name}")
+            args.append(name)
+
+    widths = dict(ABI_SHIM_STRUCT_RE.findall(text))
+    used = sorted(
+        {
+            match.group(0)
+            for param in kernel_params + hw_params + ([ret_param] if ret_param else [])
+            for match in [re.search(r"__cosim_s\d+__", param or "")]
+            if match
+        }
+    )
+    struct_defs = "\n".join(
+        f"struct {name} {{ char data[{widths.get(name, 0)}]; }};" for name in used
+    )
+
+    ir_symbol = f"apatb_{kernel}_ir"
+    shim_symbol = f"lightningsim_shim_{kernel}"
+    ir_params = ", ".join(([ret_param] if ret_param else []) + hw_params)
+    if ret_param is not None:
+        body = (
+            f"  {ret_type} __ret;\n"
+            f"  {ir_symbol}(&__ret, {', '.join(args)});\n"
+            f"  return __ret;\n"
+        )
+        shim_ret = ret_type
+    else:
+        body = f"  {ir_symbol}({', '.join(args)});\n"
+        shim_ret = "void"
+
+    source = f"""// Generated by LightningSim: ABI adapter for kernel `{kernel}`.
+{struct_defs}
+
+extern "C" void {ir_symbol}({ir_params});
+
+extern "C" {shim_ret} {shim_symbol}({', '.join(signature)}) {{
+{body}}}
+"""
+    return source, shim_symbol
+
+
 @dataclass(slots=True)
 class CompletedProcess:
     args: Sequence[str]
@@ -312,7 +463,9 @@ class Runner:
                 return compilation_processes
 
             kernel_cxx_mangled_prefix = f"_Z{len(kernel)}{kernel}"
-            kernel_target_symbol = f"apatb_{kernel}_ir"
+            # point the testbench at the ABI adapter when one was generated,
+            # otherwise straight at Vitis's wrapper as before
+            kernel_target_symbol = abi_shim_symbol or f"apatb_{kernel}_ir"
             with open(object_path, "rb") as object_fp:
                 elffile = ELFFile(object_fp)
                 kernel_source_symbols = [
@@ -369,6 +522,9 @@ class Runner:
             if not project_source_files:
                 raise RuntimeError("no testbench files found")
 
+            abi_shim = generate_abi_shim(self.solution.path, kernel)
+            abi_shim_source, abi_shim_symbol = abi_shim or (None, None)
+
         with self.steps[RunnerStep.WAITING_FOR_BITCODE]:
             bitcode_path = await self.solution.get_bitcode_path()
 
@@ -423,6 +579,58 @@ class Runner:
                             ],
                         )
                     )
+
+                    # Vitis's IR wrapper allocates each parameter buffer with an
+                    # exact byte size, while the C++ mapper copies whole 64-byte
+                    # AXI words in and out (m_axi_max_widen_bitwidth=512).  The
+                    # final partial word runs past the end of the block and
+                    # corrupts the heap; 33_flowgnn_dgn dies in free() partway
+                    # through the run.  Pad every allocation in this throwaway
+                    # simulation binary by one word so the copy fits.
+                    # NOTE: a workaround for the size mismatch between Vitis's
+                    # own two halves, not a fix for it.
+                    malloc_pad_source_path = tempdir / "malloc_pad.cpp"
+                    malloc_pad_source_path.write_text(
+                        "#include <cstddef>\n"
+                        'extern "C" void *__libc_malloc(size_t);\n'
+                        'extern "C" void *malloc(size_t n) { return __libc_malloc(n + 64); }\n'
+                    )
+                    malloc_pad_path = tempdir / "malloc_pad.o"
+                    compile_malloc_pad = create_task(
+                        run(
+                            [
+                                CC,
+                                "-std=c++14",
+                                "-c",
+                                malloc_pad_source_path,
+                                "-g",
+                                "-O2",
+                                "-o",
+                                malloc_pad_path,
+                            ],
+                        )
+                    )
+
+                    abi_shim_path = None
+                    compile_abi_shim = None
+                    if abi_shim_source is not None:
+                        abi_shim_source_path = tempdir / f"shim_{kernel}.cpp"
+                        abi_shim_source_path.write_text(abi_shim_source)
+                        abi_shim_path = tempdir / f"shim_{kernel}.o"
+                        compile_abi_shim = create_task(
+                            run(
+                                [
+                                    CC,
+                                    "-std=c++14",
+                                    "-c",
+                                    abi_shim_source_path,
+                                    "-g",
+                                    "-O2",
+                                    "-o",
+                                    abi_shim_path,
+                                ],
+                            )
+                        )
 
                     project_object_paths = [
                         tempdir / f"testbench.{i}.o"
@@ -510,9 +718,22 @@ class Runner:
                     self.add_completed_processes(compile_project_files)
                     for compilation in compile_project_files:
                         compilation.check_returncode()
+                    compile_malloc_pad = await compile_malloc_pad
+                    self.add_completed_process(compile_malloc_pad)
+                    compile_malloc_pad.check_returncode()
+                    if compile_abi_shim is not None:
+                        compile_abi_shim = await compile_abi_shim
+                        self.add_completed_process(compile_abi_shim)
+                        compile_abi_shim.check_returncode()
                     link_objects = " ".join(
                         str(path).replace(" ", "\\ ")
-                        for path in (*project_object_paths, object_path, mapper_hw_path)
+                        for path in (
+                            *project_object_paths,
+                            object_path,
+                            mapper_hw_path,
+                            malloc_pad_path,
+                            *((abi_shim_path,) if abi_shim_path is not None else ()),
+                        )
                     )
                     extra_ld_flags = shlex.join(
                         str(flag)

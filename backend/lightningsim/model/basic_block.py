@@ -70,8 +70,13 @@ class BasicBlock:
 
         for instruction, llvm_instruction in instructions.items():
             if llvm_instruction.name:
-                assert (
-                    llvm_instruction.name == instruction.name
+                # Vitis appends "_r" in the schedule database to names that would
+                # clash with an RTL reserved word (e.g. `left`/`right`, which are
+                # predefined attributes in VHDL), while the LLVM IR keeps the
+                # original name.  That rename is expected, not a pairing error.
+                assert llvm_instruction.name in (
+                    instruction.name,
+                    instruction.name.removesuffix("_r"),
                 ), f"Instruction name mismatch: {llvm_instruction.name} != {instruction.name}"
 
         return instructions
@@ -98,14 +103,13 @@ class BasicBlock:
                     return 1
 
                 if interface_type == "ap_fifo":
-                    num_operands = sum(
-                        int(
-                            operand is not None
-                            and operand.type == CDFGEdge.INPUT
-                            and operand.sink_id == instruction.id
-                        )
-                        for operand in instruction.operands
-                    )
+                    # Count the FIFO arguments of the call itself, not the CDFG
+                    # edges into this node.  Vitis 2024.1 adds extra dependence
+                    # edges (e.g. from a store in the same block), which inflated
+                    # the edge-based count and made LightningSim expect more FIFO
+                    # events than the design actually performs.  The call's own
+                    # operands (all but the trailing callee) are the FIFO ports.
+                    num_operands = len(list(instruction.llvm.operands)) - 1
                     return {
                         "read": num_operands,
                         "write": num_operands // 2,
