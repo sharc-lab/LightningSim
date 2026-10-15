@@ -93,11 +93,20 @@ impl AxiRctl {
                         },
                     );
                 }
+                // The callee overflowed, so replaying its head always takes the caller to
+                // depth >= MAX_RCTL_DEPTH.  But push() only checks capacity BEFORE adding,
+                // so one large multi-page request can cross the limit without the state
+                // ever flipping (33_flowgnn_dgn: a 41-burst read on top of 3 in flight).
+                // Make the transition push() would make on the next request, minus the
+                // eviction, since no new request is waiting.
+                if let WithinCapacity(queue) = &mut self.state {
+                    let head = queue.iter().map(Into::into).collect();
+                    let tail = mem::take(queue);
+                    self.state = Overflowed { head, tail };
+                }
                 let (head, overlap) = match &mut self.state {
                     Overflowed { head, tail } => (head, tail),
-                    WithinCapacity(_) => panic!(
-                        "AxiRctl::extend was called with overflowed AxiRctl but did not overflow"
-                    ),
+                    WithinCapacity(_) => unreachable!(),
                 };
                 let head = mem::take(head);
                 if let Some(dangling) = overlap.len().checked_sub(overlap_len) {
