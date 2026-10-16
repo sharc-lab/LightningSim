@@ -1,7 +1,7 @@
 CXXFLAGS?=-g -O3 -fPIC
 DESTDIR=templates
-OBJS=src/fifo.o src/m_axi.o src/trace.o
-OUTPUTS=$(DESTDIR)/liblightningsimrt.a $(DESTDIR)/fifo.ll.jinja $(DESTDIR)/m_axi.ll.jinja
+OBJS=src/axis.o src/fifo.o src/m_axi.o src/trace.o
+OUTPUTS=$(DESTDIR)/liblightningsimrt.a $(DESTDIR)/fifo.ll.jinja $(DESTDIR)/m_axi.ll.jinja $(DESTDIR)/axis.ll.jinja
 
 .PHONY: all clean
 

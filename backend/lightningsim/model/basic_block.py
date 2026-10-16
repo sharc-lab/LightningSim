@@ -70,8 +70,13 @@ class BasicBlock:
 
         for instruction, llvm_instruction in instructions.items():
             if llvm_instruction.name:
+                # Vitis renames some alloca nodes (e.g. left -> left_r).
                 assert (
                     llvm_instruction.name == instruction.name
+                    or (
+                        llvm_instruction.opcode == instruction.opcode == "alloca"
+                        and instruction.name == llvm_instruction.name + "_r"
+                    )
                 ), f"Instruction name mismatch: {llvm_instruction.name} != {instruction.name}"
 
         return instructions
@@ -98,14 +103,13 @@ class BasicBlock:
                     return 1
 
                 if interface_type == "ap_fifo":
-                    num_operands = sum(
-                        int(
-                            operand is not None
-                            and operand.type == CDFGEdge.INPUT
-                            and operand.sink_id == instruction.id
-                        )
-                        for operand in instruction.operands
-                    )
+                    # Count the FIFO arguments of the call itself, not the CDFG
+                    # edges into this node.  Vitis 2024.1 adds extra dependence
+                    # edges (e.g. from a store in the same block), which inflated
+                    # the edge-based count and made LightningSim expect more FIFO
+                    # events than the design actually performs.  The call's own
+                    # operands (all but the trailing callee) are the FIFO ports.
+                    num_operands = len(list(instruction.llvm.operands)) - 1
                     return {
                         "read": num_operands,
                         "write": num_operands // 2,

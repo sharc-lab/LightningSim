@@ -93,11 +93,16 @@ impl AxiRctl {
                         },
                     );
                 }
+                // Replaying the head can cross the limit after push's capacity check.
+                // Record overflow without evicting a request.
+                if let WithinCapacity(queue) = &mut self.state {
+                    let head = queue.iter().map(Into::into).collect();
+                    let tail = mem::take(queue);
+                    self.state = Overflowed { head, tail };
+                }
                 let (head, overlap) = match &mut self.state {
                     Overflowed { head, tail } => (head, tail),
-                    WithinCapacity(_) => panic!(
-                        "AxiRctl::extend was called with overflowed AxiRctl but did not overflow"
-                    ),
+                    WithinCapacity(_) => unreachable!(),
                 };
                 let head = mem::take(head);
                 if let Some(dangling) = overlap.len().checked_sub(overlap_len) {
