@@ -2,6 +2,7 @@ import os
 import re
 import shlex
 import shutil
+import sys
 import llvmlite.binding as llvm
 from asyncio import (
     StreamReader,
@@ -37,7 +38,7 @@ from typing import (
 from .model import Solution, ProjectFile
 from .trace_file import ResolvedTrace, await_trace_functions, read_trace, resolve_trace
 
-CONDA_PREFIX = Path(r"""/opt/anaconda1anaconda2anaconda3""")
+CONDA_PREFIX = Path(sys.prefix)
 LLVM_ROOT = CONDA_PREFIX / "share/lightningsim/llvm"
 SYSTEMC_ROOT = CONDA_PREFIX / "share/lightningsim/systemc"
 TEMPLATE_DIR = CONDA_PREFIX / "share/lightningsim/templates"
@@ -116,18 +117,10 @@ FUNCTION_TEMPLATES = [
 ]
 
 
-# --- ABI adapter for by-value scalar kernel arguments -------------------------
-# Vitis (2023.1 and later, at least) declares small scalar kernel arguments
-# (ap_int/ap_uint/ap_fixed, lowered to __cosim_sN__) BY POINTER in
-# apatb_<kernel>_ir, while a normally compiled C++ testbench passes them BY
-# VALUE.  Renaming the testbench's call onto apatb_<kernel>_ir therefore hands a
-# value to a function expecting an address: the testbench segfaults before the
-# kernel runs, and LightningSim reports "kernel did not run".
-#
-# generate_abi_shim() emits a small adapter with the by-value signature that
-# forwards addresses.  The testbench is pointed at the adapter instead.
-
-ABI_SHIM_STRUCT_RE = re.compile(r"struct\s+(__cosim_s(\d+)__)\s*\{[^}]*\};")
+# Vitis mapper wrappers pass some testbench scalar values and returns by pointer.
+ABI_SHIM_STRUCT_RE = re.compile(
+    r"struct\s+(__cosim_s(\d+)__)\s*\{\s*char\s+data\[(\d+)\];\s*\};"
+)
 ABI_SHIM_COSIM_RE = re.compile(r"^__cosim_s\d+__$")
 
 
@@ -151,7 +144,7 @@ def _abi_shim_split_params(text: str):
 
 def _abi_shim_param_type(param: str) -> str:
     """Strip the parameter name: 'volatile void * __xlx_p' -> 'void *'."""
-    param = param.replace("volatile", "").strip()
+    param = re.sub(r"\bvolatile\b", "", param).strip()
     match = re.match(r"^(.*?[\*\s])([A-Za-z_]\w*)$", param)
     if match and not match.group(2).startswith("__cosim"):
         param = match.group(1)
@@ -188,26 +181,19 @@ def generate_abi_shim(solution_path: Path, kernel: str):
         _abi_shim_param_type(p) for p in _abi_shim_split_params(hw_decl.group("params"))
     ]
 
-    # a non-void return is passed as an extra FIRST parameter of the wrapper
     ret_param = None
     if ret_type != "void" and len(hw_params) == len(kernel_params) + 1:
         ret_param, hw_params = hw_params[0], hw_params[1:]
+        if ret_param.replace(" ", "") != ret_type.replace(" ", "") + "*":
+            raise RuntimeError(f"unsupported return ABI for `{kernel}`: {ret_param}")
 
-    # Adapt when the kernel takes a scalar BY VALUE (the wrapper wants a pointer)
-    # or when it RETURNS a value (the wrapper takes the result through a hidden
-    # first pointer argument, while the testbench expects a returned value).
-    # Without the adapter the latter corrupts results: the cycle count is still
-    # right, but the testbench computes wrong values -- 01, 10, 19 and 20 all
-    # fail their own checks, while 08, which already got an adapter, passes.
-    #
-    # Nothing to adapt otherwise.  (Vitis sometimes bundles several array
-    # arguments into one buffer, so the two declarations do not always line up
-    # one-to-one; that is fine as long as neither case applies.)
-    has_byvalue_scalar = any(
+    has_value_input = any(
         ABI_SHIM_COSIM_RE.match(p.replace(" ", "")) for p in kernel_params
     )
-    if not has_byvalue_scalar and ret_param is None:
+    if not has_value_input and ret_param is None:
         return None
+    if ret_type != "void" and ret_param is None:
+        raise RuntimeError(f"unsupported return ABI for `{kernel}`: {ret_type}")
 
     if len(kernel_params) != len(hw_params):
         raise RuntimeError(
@@ -219,9 +205,11 @@ def generate_abi_shim(solution_path: Path, kernel: str):
     signature, args = [], []
     for i, (k, h) in enumerate(zip(kernel_params, hw_params)):
         name = f"a{i}"
-        if ABI_SHIM_COSIM_RE.match(k.replace(" ", "")) and h.rstrip().endswith("*"):
+        if ABI_SHIM_COSIM_RE.match(k.replace(" ", "")):
+            if not h.rstrip().endswith("*"):
+                raise RuntimeError(f"unsupported scalar ABI for `{kernel}`: {k} -> {h}")
             signature.append(f"{k} {name}")
-            args.append(f"&{name}")  # by value in, by address out
+            args.append(f"&{name}")
         elif "*" in k:
             signature.append(f"void *{name}")
             args.append(name)
@@ -229,7 +217,11 @@ def generate_abi_shim(solution_path: Path, kernel: str):
             signature.append(f"{k} {name}")
             args.append(name)
 
-    widths = dict(ABI_SHIM_STRUCT_RE.findall(text))
+    widths = {
+        name: size
+        for name, type_size, size in ABI_SHIM_STRUCT_RE.findall(text)
+        if type_size == size
+    }
     used = sorted(
         {
             match.group(0)
@@ -238,8 +230,11 @@ def generate_abi_shim(solution_path: Path, kernel: str):
             if match
         }
     )
+    missing = set(used) - widths.keys()
+    if missing:
+        raise RuntimeError(f"missing mapper scalar definitions for `{kernel}`: {sorted(missing)}")
     struct_defs = "\n".join(
-        f"struct {name} {{ char data[{widths.get(name, 0)}]; }};" for name in used
+        f"struct {name} {{ char data[{widths[name]}]; }};" for name in used
     )
 
     ir_symbol = f"apatb_{kernel}_ir"
@@ -256,8 +251,7 @@ def generate_abi_shim(solution_path: Path, kernel: str):
         body = f"  {ir_symbol}({', '.join(args)});\n"
         shim_ret = "void"
 
-    source = f"""// Generated by LightningSim: ABI adapter for kernel `{kernel}`.
-{struct_defs}
+    source = f"""{struct_defs}
 
 extern "C" void {ir_symbol}({ir_params});
 
