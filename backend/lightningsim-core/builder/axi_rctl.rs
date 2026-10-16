@@ -93,12 +93,8 @@ impl AxiRctl {
                         },
                     );
                 }
-                // The callee overflowed, so replaying its head always takes the caller to
-                // depth >= MAX_RCTL_DEPTH.  But push() only checks capacity BEFORE adding,
-                // so one large multi-page request can cross the limit without the state
-                // ever flipping (33_flowgnn_dgn: a 41-burst read on top of 3 in flight).
-                // Make the transition push() would make on the next request, minus the
-                // eviction, since no new request is waiting.
+                // Replaying the head can cross the limit after push's capacity check.
+                // Record overflow without evicting a request.
                 if let WithinCapacity(queue) = &mut self.state {
                     let head = queue.iter().map(Into::into).collect();
                     let tail = mem::take(queue);

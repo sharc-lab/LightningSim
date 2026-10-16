@@ -70,13 +70,13 @@ class BasicBlock:
 
         for instruction, llvm_instruction in instructions.items():
             if llvm_instruction.name:
-                # Vitis appends "_r" in the schedule database to names that would
-                # clash with an RTL reserved word (e.g. `left`/`right`, which are
-                # predefined attributes in VHDL), while the LLVM IR keeps the
-                # original name.  That rename is expected, not a pairing error.
-                assert llvm_instruction.name in (
-                    instruction.name,
-                    instruction.name.removesuffix("_r"),
+                # Vitis renames some alloca nodes (e.g. left -> left_r).
+                assert (
+                    llvm_instruction.name == instruction.name
+                    or (
+                        llvm_instruction.opcode == instruction.opcode == "alloca"
+                        and instruction.name == llvm_instruction.name + "_r"
+                    )
                 ), f"Instruction name mismatch: {llvm_instruction.name} != {instruction.name}"
 
         return instructions

@@ -241,9 +241,10 @@ def generate_abi_shim(solution_path: Path, kernel: str):
     shim_symbol = f"lightningsim_shim_{kernel}"
     ir_params = ", ".join(([ret_param] if ret_param else []) + hw_params)
     if ret_param is not None:
+        ir_args = ", ".join(["&__ret", *args])
         body = (
             f"  {ret_type} __ret;\n"
-            f"  {ir_symbol}(&__ret, {', '.join(args)});\n"
+            f"  {ir_symbol}({ir_args});\n"
             f"  return __ret;\n"
         )
         shim_ret = ret_type
@@ -474,8 +475,6 @@ class Runner:
                 return compilation_processes
 
             kernel_cxx_mangled_prefix = f"_Z{len(kernel)}{kernel}"
-            # point the testbench at the ABI adapter when one was generated,
-            # otherwise straight at Vitis's wrapper as before
             kernel_target_symbol = abi_shim_symbol or f"apatb_{kernel}_ir"
             with open(object_path, "rb") as object_fp:
                 elffile = ELFFile(object_fp)
@@ -591,15 +590,8 @@ class Runner:
                         )
                     )
 
-                    # Vitis's IR wrapper allocates each parameter buffer with an
-                    # exact byte size, while the C++ mapper copies whole 64-byte
-                    # AXI words in and out (m_axi_max_widen_bitwidth=512).  The
-                    # final partial word runs past the end of the block and
-                    # corrupts the heap; 33_flowgnn_dgn dies in free() partway
-                    # through the run.  Pad every allocation in this throwaway
-                    # simulation binary by one word so the copy fits.
-                    # NOTE: a workaround for the size mismatch between Vitis's
-                    # own two halves, not a fix for it.
+                    # Vitis's mapper copies full 64-byte words into shorter buffers.
+                    # This pads heap allocations, but does not cover stack buffers.
                     malloc_pad_source_path = tempdir / "malloc_pad.cpp"
                     malloc_pad_source_path.write_text(
                         "#include <cstddef>\n"
@@ -832,8 +824,7 @@ class Runner:
                 )
                 self.testbench = testbench_process
                 self.add_completed_process(testbench_process)
-                # a failing testbench means the simulated data is wrong; stop rather
-                # than report a cycle count for it (from isaac)
+                # Do not report cycles when the testbench rejects the result.
                 testbench_process.check_returncode()
 
         with self.steps[RunnerStep.PARSING_SCHEDULE_DATA]:
